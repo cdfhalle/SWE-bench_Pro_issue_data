@@ -99,13 +99,26 @@ def main(
     print(f"not resolved        : {total - resolved_n - no_verdict}")
     print(f"no parsed output    : {no_verdict}")
     print(f"\neval status shards  : {dict(Counter(eval_status.values()))}")
+    down = 0
     if gen_output is not None:
         gen_status = read_status_dir(gen_output / "_status")
         print(f"gen status shards   : {dict(Counter(gen_status.values()))}")
+        down = sum(1 for v in gen_status.values() if v == "ENDPOINT_DOWN")
     print("\nper-repo (resolved / total):")
     for repo in sorted(per_repo):
         verdicts = per_repo[repo]
         print(f"  {repo:<40} {sum(1 for v in verdicts if v is True)}/{len(verdicts)}")
+    if down:
+        # Not a model result: these instances never got an answer, so the resolved
+        # rate above is computed over a denominator that includes them. Rerun them
+        # once the endpoint is back rather than reading this as a score.
+        print()
+        print("!" * 64)
+        print(f"WARNING: {down}/{total} instances recorded ENDPOINT_DOWN -- the model")
+        print("server went away mid-run, so those are not model failures and the")
+        print("resolved rate above understates the model. Rerun them.")
+        print("!" * 64)
+
     print("=" * 64)
     print(f"wrote {results_out}")
 

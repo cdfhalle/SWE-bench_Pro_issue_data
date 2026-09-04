@@ -138,5 +138,24 @@ elif [ ! -f "$PRED" ]; then
   record NO_PRED
 else
   plen=$("$SWEBP_PYTHON" -c "import json;print(len(json.load(open('$PRED')).get('model_patch','').strip()))" 2>/dev/null || echo 0)
-  [ "$plen" -gt 0 ] && record SUBMITTED || record EMPTY_PATCH
+  if [ "$plen" -gt 0 ]; then
+    record SUBMITTED
+  else
+    # An empty patch means either the model produced nothing, or the server died
+    # mid-episode and every request failed. Those need different responses -- one
+    # is a result, the other invalidates the run -- and they are indistinguishable
+    # after the fact, because the start-of-job preflight passed in both cases.
+    # Re-probe now: if the endpoint has since gone away, say so.
+    if [ -n "${OPENAI_API_BASE:-}" ] && [ -z "${SKIP_ENDPOINT_CHECK:-}" ]; then
+      code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 20 "$OPENAI_API_BASE/models" \
+               -H "Authorization: Bearer ${OPENAI_API_KEY:-local}" 2>/dev/null)
+      code=${code:-000}
+      if [ "$code" != "200" ]; then
+        echo "endpoint postflight: GET $OPENAI_API_BASE/models -> $code (was 200 at job start)"
+        record ENDPOINT_DOWN
+        exit 0
+      fi
+    fi
+    record EMPTY_PATCH
+  fi
 fi
