@@ -24,12 +24,15 @@
 #SBATCH --output=logs/%x-%A_%a.out
 
 set -uo pipefail
-cd /sc/home/conrad.halle/projects/swe-bench-pro-slurm
+# Locate the checkout and load site settings. An explicit SWEBP_REPO wins;
+# otherwise use the directory sbatch was submitted from (the repo root).
+cd "${SWEBP_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
+source ./config.sh
 
 # `enroot import` runs in the shell, so export the ENROOT_* paths mini only loads
 # into Python from .env.
 # (grep keeps only the export lines: importing minisweagent also prints a banner to stdout)
-eval "$(.venv/bin/python -c 'import minisweagent,os; print("\n".join(f"export {k}={os.environ[k]}" for k in ["ENROOT_CACHE_PATH","ENROOT_DATA_PATH","ENROOT_SYSCONF_PATH"] if k in os.environ))' | grep '^export ')"
+eval "$("$SWEBP_PYTHON" -c 'import minisweagent,os; print("\n".join(f"export {k}={os.environ[k]}" for k in ["ENROOT_CACHE_PATH","ENROOT_DATA_PATH","ENROOT_SYSCONF_PATH"] if k in os.environ))' | grep '^export ')"
 mkdir -p "$ENROOT_DATA_PATH" "$ENROOT_CACHE_PATH"
 
 RUN="${RUN:-runs/default}"
@@ -37,7 +40,7 @@ INSTANCES="${INSTANCES:-$RUN/instances.jsonl}"
 PATCHES="${PATCHES:-$RUN/patches.json}"
 OUT="${OUT:-$RUN/eval_output}"
 PREFIX="${PREFIX:-eval}"
-IMAGES_DIR="${IMAGES_DIR:-/sc/scratch/conrad.halle/swebp/images}"
+IMAGES_DIR="${IMAGES_DIR:-$SWEBP_IMAGES_DIR}"
 STATUS_DIR="$OUT/_status"
 mkdir -p "$IMAGES_DIR" "$STATUS_DIR"
 
@@ -47,7 +50,7 @@ source slurm/stage_image.sh
 STATUS_FILE="$STATUS_DIR/$SLURM_ARRAY_TASK_ID.txt"
 record() { echo "$1 $IID" > "$STATUS_FILE"; echo "VERDICT: $1 $IID"; }
 
-read -r IID IMAGE_NAME SQSH_BASE < <(.venv/bin/python -c "
+read -r IID IMAGE_NAME SQSH_BASE < <("$SWEBP_PYTHON" -c "
 import json
 r = json.loads(open('$INSTANCES').read().splitlines()[$SLURM_ARRAY_TASK_ID])
 print(r['instance_id'], r['image_name'], r['sqsh_base'])
@@ -70,7 +73,7 @@ else
   echo "image already staged"
 fi
 
-.venv/bin/python -m swebp_slurm.run_eval \
+"$SWEBP_PYTHON" -m swebp_slurm.run_eval \
   --instances-file "$INSTANCES" --index "$SLURM_ARRAY_TASK_ID" \
   --patches-file "$PATCHES" --image "$SQSH" \
   --prefix "$PREFIX" --output "$OUT" \

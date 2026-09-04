@@ -17,14 +17,17 @@
 #SBATCH --output=logs/%x-%j.out
 
 set -uo pipefail
-cd /sc/home/conrad.halle/projects/swe-bench-pro-slurm
+# Locate the checkout and load site settings. An explicit SWEBP_REPO wins;
+# otherwise use the directory sbatch was submitted from (the repo root).
+cd "${SWEBP_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
+source ./config.sh
 
 RUN="${RUN:-runs/default}"
 INSTANCES="${INSTANCES:-$RUN/instances.jsonl}"
-IMAGES_DIR="${IMAGES_DIR:-/sc/scratch/conrad.halle/swebp/images}"
+IMAGES_DIR="${IMAGES_DIR:-$SWEBP_IMAGES_DIR}"
 
 echo "sweeping images for '$INSTANCES' from '$IMAGES_DIR'"
-.venv/bin/python -c "
+"$SWEBP_PYTHON" -c "
 import json, os
 removed = freed = 0
 for line in open('$INSTANCES'):

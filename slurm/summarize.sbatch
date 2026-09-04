@@ -13,7 +13,10 @@
 #SBATCH --output=logs/%x-%j.out
 
 set -uo pipefail
-cd /sc/home/conrad.halle/projects/swe-bench-pro-slurm
+# Locate the checkout and load site settings. An explicit SWEBP_REPO wins;
+# otherwise use the directory sbatch was submitted from (the repo root).
+cd "${SWEBP_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
+source ./config.sh
 
 RUN="${RUN:-runs/default}"
 INSTANCES="${INSTANCES:-$RUN/instances.jsonl}"
@@ -22,7 +25,7 @@ GEN_OUT="${GEN_OUT:-$RUN/generation_output}"
 PREFIX="${PREFIX:-eval}"
 RESULTS="${RESULTS:-$RUN/results.json}"
 
-.venv/bin/python -m swebp_slurm.summarize \
+"$SWEBP_PYTHON" -m swebp_slurm.summarize \
   --instances-file "$INSTANCES" \
   --eval-output "$OUT" \
   --gen-output "$GEN_OUT" \

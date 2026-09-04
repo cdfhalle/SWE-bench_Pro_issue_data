@@ -18,14 +18,20 @@
 
 set -uo pipefail
 
-REPO=/sc/home/conrad.halle/projects/swe-bench-pro-slurm
+# Locate the checkout and load site settings. An explicit SWEBP_REPO wins;
+# otherwise use the directory sbatch was submitted from (the repo root).
+cd "${SWEBP_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
+source ./config.sh
+REPO="$SWEBP_REPO"
 cd "$REPO"
 
 # Rebuild the enroot sysconf mirror that mutes the spurious /scratch mount warning.
 bash slurm/setup_enroot_sysconf.sh >/dev/null
 
 IID=instance_NodeBB__NodeBB-04998908ba6721d64eba79ae3b65a351dcfbc5b5-vnan
-IMG=/sc/scratch/conrad.halle/swebp/images/TEST_nodebb-NodeBB__NodeBB-04998908ba6721d64eba79ae3b65a351dcfbc5b5.sqsh
+# Smoke-test image. The sqsh basename is the DockerHub tag minus the leading
+# "<repo_base>." -- stage it first if absent (see slurm/stage_image.sh).
+IMG="${IMG:-$SWEBP_IMAGES_DIR/nodebb-NodeBB__NodeBB-04998908ba6721d64eba79ae3b65a351dcfbc5b5.sqsh}"
 # Overridable via sbatch --export (e.g. to eval a gold patch):
 #   sbatch --export=ALL,PRED=gold_patches/$IID.pred,PREFIX=gold,OUT=runs/smoke/eval_gold ...
 OUT="${OUT:-runs/smoke/eval_output}"
@@ -35,7 +41,7 @@ PRED="${PRED:-runs/smoke/generation_output/$IID/$IID.pred}"
 echo "===== PREFLIGHT ====="
 echo "node          : $(hostname)"
 echo "job           : ${SLURM_JOB_ID:-?}"
-DATA_DIR=$(.venv/bin/python -c 'import minisweagent,os;print(os.environ["ENROOT_DATA_PATH"])' 2>/dev/null | tail -1)
+DATA_DIR=$("$SWEBP_PYTHON" -c 'import minisweagent,os;print(os.environ["ENROOT_DATA_PATH"])' 2>/dev/null | tail -1)
 mkdir -p "$DATA_DIR"
 echo "ENROOT_DATA   : $DATA_DIR ($(findmnt -no FSTYPE --target "$DATA_DIR"))"
 echo -n "npm-registry egress: "; curl -sS -o /dev/null -w "%{http_code}\n" --max-time 10 https://registry.npmjs.org/ 2>&1 || echo "FAILED"
@@ -44,7 +50,7 @@ echo "prefix/out    : $PREFIX / $OUT"
 echo "image present : $([ -f "$IMG" ] && echo yes || echo NO)"
 echo "====================="
 
-.venv/bin/python -m swebp_slurm.run_eval "$IID" \
+"$SWEBP_PYTHON" -m swebp_slurm.run_eval "$IID" \
   --image "$IMG" \
   --pred "$PRED" \
   --prefix "$PREFIX" \
@@ -54,7 +60,7 @@ rc=$?
 
 echo "===== RESULT (run_eval rc=$rc; 0=resolved, 1=not resolved, 2=harness error) ====="
 echo "--- parsed output.json (test statuses) ---"
-.venv/bin/python -c "
+"$SWEBP_PYTHON" -c "
 import json,glob
 f=glob.glob('$OUT/$IID/*_output.json')
 if not f: print('no output.json'); raise SystemExit

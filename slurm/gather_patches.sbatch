@@ -15,7 +15,10 @@
 #SBATCH --output=logs/%x-%j.out
 
 set -uo pipefail
-cd /sc/home/conrad.halle/projects/swe-bench-pro-slurm
+# Locate the checkout and load site settings. An explicit SWEBP_REPO wins;
+# otherwise use the directory sbatch was submitted from (the repo root).
+cd "${SWEBP_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
+source ./config.sh
 
 RUN="${RUN:-runs/default}"
 OUT="${OUT:-$RUN/generation_output}"
@@ -23,12 +26,12 @@ PATCHES="${PATCHES:-$RUN/patches.json}"
 PREFIX="${PREFIX:-gen}"
 
 echo "gathering preds from '$OUT' -> '$PATCHES' (prefix=$PREFIX)"
-.venv/bin/python helper_code/gather_patches.py \
+"$SWEBP_PYTHON" helper_code/gather_patches.py \
   --directory "$OUT" --prefix "$PREFIX" --output "$PATCHES"
 rc=$?
 
 echo "--- patches summary ---"
-.venv/bin/python -c "
+"$SWEBP_PYTHON" -c "
 import json
 d = json.load(open('$PATCHES'))
 n = len(d)
