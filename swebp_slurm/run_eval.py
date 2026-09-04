@@ -191,7 +191,13 @@ def main(
         patch = read_patch(pred_path)
         patch_src = pred_path
     if not patch.strip():
-        raise typer.BadParameter(f"empty patch from {patch_src}")
+        # An empty patch is a legitimate NOT-RESOLVED, not a harness fault: the
+        # agent simply produced nothing (step limit, API outage, refusal). Raising
+        # here would exit with typer's usage code 2, which the sbatch wrappers map
+        # to HARNESS_ERROR -- making a degraded run indistinguishable from a broken
+        # harness, and recording `null` instead of `false` in results.json.
+        print(f"Empty patch from {patch_src}: nothing to apply -> NOT RESOLVED")
+        raise typer.Exit(code=1)
 
     image_path = (image or derive_image_path(sample, images_dir, dockerhub_username)).resolve()
     if not image_path.exists():

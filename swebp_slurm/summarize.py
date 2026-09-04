@@ -77,6 +77,12 @@ def main(
         out_path = eval_output / iid / f"{prefix}_output.json"
         output = json.loads(out_path.read_text()) if out_path.exists() else None
         resolved = resolved_from_output(sample, output)
+        if resolved is None and eval_status.get(iid) == "NOT_RESOLVED":
+            # No output.json, but the task recorded a definite verdict -- an empty
+            # patch, which never reaches the test suite. That is a real `false`,
+            # not a missing measurement; leaving it None would understate the
+            # denominator and make a degraded run look like a broken harness.
+            resolved = False
         results[iid] = resolved
         per_repo[sample.get("repo", "?")].append(resolved)
 
