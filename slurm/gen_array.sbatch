@@ -23,7 +23,10 @@
 #SBATCH --output=logs/%x-%A_%a.out
 
 set -uo pipefail
-cd /sc/home/conrad.halle/projects/swe-bench-pro-slurm
+# Locate the checkout and load site settings. An explicit SWEBP_REPO wins;
+# otherwise use the directory sbatch was submitted from (the repo root).
+cd "${SWEBP_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
+source ./config.sh
 
 # litellm has no price table for OpenRouter models; let mini ignore cost calc
 # (cost stays 0; --step-limit is the real guard).
@@ -32,25 +35,60 @@ export MSWEA_COST_TRACKING=ignore_errors
 # `enroot import` runs in the shell, so export the ENROOT_* paths mini only loads
 # into Python from .env.
 # (grep keeps only the export lines: importing minisweagent also prints a banner to stdout)
-eval "$(.venv/bin/python -c 'import minisweagent,os; print("\n".join(f"export {k}={os.environ[k]}" for k in ["ENROOT_CACHE_PATH","ENROOT_DATA_PATH","ENROOT_SYSCONF_PATH"] if k in os.environ))' | grep '^export ')"
+eval "$("$SWEBP_PYTHON" -c 'import minisweagent,os; print("\n".join(f"export {k}={os.environ[k]}" for k in ["ENROOT_CACHE_PATH","ENROOT_DATA_PATH","ENROOT_SYSCONF_PATH"] if k in os.environ))' | grep '^export ')"
 mkdir -p "$ENROOT_DATA_PATH" "$ENROOT_CACHE_PATH"
 
 RUN="${RUN:-runs/default}"
 INSTANCES="${INSTANCES:-$RUN/instances.jsonl}"
 OUT="${OUT:-$RUN/generation_output}"
-IMAGES_DIR="${IMAGES_DIR:-/sc/scratch/conrad.halle/swebp/images}"
+IMAGES_DIR="${IMAGES_DIR:-$SWEBP_IMAGES_DIR}"
 MODEL="${MODEL:-openrouter/deepseek/deepseek-v4-flash}"
 
-# Local OpenAI-compatible endpoint (our SGLang server). Set API_BASE to route an
-# `openai/<served-model-name>` MODEL at it, e.g.
-#   --export=ALL,MODEL=openai/deepseek-v4-flash,API_BASE=http://gx32:8000/v1
-# litellm reads both vars itself; the key is ignored by the server but must be
-# non-empty or litellm raises AuthenticationError before it ever sends a request.
-# The host is per-serving-job (gx32 today) -- re-export it for a new server.
+# Local OpenAI-compatible endpoint (e.g. a self-hosted SGLang server). Set
+# API_BASE to route an `openai/<served-model-name>` MODEL at it:
+#   --export=ALL,MODEL=openai/deepseek-v4-flash,API_BASE=http://gx24:8000/v1
+# litellm reads OPENAI_API_BASE/OPENAI_API_KEY itself; the key is ignored by the
+# server but must be non-empty or litellm raises AuthenticationError before it
+# ever sends a request.
+#
+# The serving job runs on a different node each time, so rather than hardcoding a
+# hostname we read the endpoint descriptor the serving repo writes (and deletes on
+# exit). ENDPOINT_JSON=<path> overrides; an explicit API_BASE wins over both.
+ENDPOINT_JSON="${ENDPOINT_JSON:-$SWEBP_ENDPOINT_JSON}"
+if [ -z "${API_BASE:-}" ] && [ -f "$ENDPOINT_JSON" ]; then
+  API_BASE=$("$SWEBP_PYTHON" -c "
+import json,sys
+try:
+    d=json.load(open('$ENDPOINT_JSON'))
+    print(d['base_url'] if d.get('ready') else '')
+except Exception:
+    print('')
+" 2>/dev/null | tail -1)
+  [ -n "$API_BASE" ] && echo "discovered endpoint from $ENDPOINT_JSON: $API_BASE"
+fi
+
 if [ -n "${API_BASE:-}" ]; then
   export OPENAI_API_BASE="$API_BASE"
   export OPENAI_API_KEY="${OPENAI_API_KEY:-local}"
   echo "api_base=$OPENAI_API_BASE"
+
+  # Fail fast if the server is gone. Without this, every task burns its full
+  # litellm retry ladder (4s..60s x7) against a dead host and then reports a
+  # silent EMPTY_PATCH -- which is how a mid-run server crash cost most of a
+  # batch: the run looked like a bad model rather than a dead endpoint.
+  # SKIP_ENDPOINT_CHECK=1 bypasses (e.g. a server without /v1/models).
+  if [ -z "${SKIP_ENDPOINT_CHECK:-}" ]; then
+    code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 20 "$OPENAI_API_BASE/models" \
+             -H "Authorization: Bearer $OPENAI_API_KEY" 2>/dev/null)
+    code=${code:-000}
+    echo "endpoint preflight: GET $OPENAI_API_BASE/models -> $code"
+    if [ "$code" != "200" ]; then
+      echo "VERDICT: ENDPOINT_DOWN ${IID:-task-$SLURM_ARRAY_TASK_ID}"
+      mkdir -p "${OUT:-$RUN/generation_output}/_status"
+      echo "ENDPOINT_DOWN unknown" > "${OUT:-$RUN/generation_output}/_status/$SLURM_ARRAY_TASK_ID.txt"
+      exit 2
+    fi
+  fi
 fi
 
 STATUS_DIR="$OUT/_status"
@@ -64,7 +102,7 @@ record() { echo "$1 $IID" > "$STATUS_FILE"; echo "VERDICT: $1 $IID"; }
 
 # Pull the three fields this task needs (iid for status, image_name+sqsh_base for
 # staging) from its line; run_instance reads the full record itself via --index.
-read -r IID IMAGE_NAME SQSH_BASE < <(.venv/bin/python -c "
+read -r IID IMAGE_NAME SQSH_BASE < <("$SWEBP_PYTHON" -c "
 import json
 r = json.loads(open('$INSTANCES').read().splitlines()[$SLURM_ARRAY_TASK_ID])
 print(r['instance_id'], r['image_name'], r['sqsh_base'])
@@ -87,7 +125,7 @@ else
   echo "image already staged"
 fi
 
-.venv/bin/python -m swebp_slurm.run_instance \
+"$SWEBP_PYTHON" -m swebp_slurm.run_instance \
   --instances-file "$INSTANCES" --index "$SLURM_ARRAY_TASK_ID" \
   --image "$SQSH" --model "$MODEL" --output "$OUT" \
   ${STEP_LIMIT:+--step-limit "$STEP_LIMIT"}
@@ -99,6 +137,6 @@ if [ "$rc" -ne 0 ]; then
 elif [ ! -f "$PRED" ]; then
   record NO_PRED
 else
-  plen=$(.venv/bin/python -c "import json;print(len(json.load(open('$PRED')).get('model_patch','').strip()))" 2>/dev/null || echo 0)
+  plen=$("$SWEBP_PYTHON" -c "import json;print(len(json.load(open('$PRED')).get('model_patch','').strip()))" 2>/dev/null || echo 0)
   [ "$plen" -gt 0 ] && record SUBMITTED || record EMPTY_PATCH
 fi
