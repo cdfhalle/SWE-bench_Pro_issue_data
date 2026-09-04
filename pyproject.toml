@@ -1,0 +1,43 @@
+[project]
+name = "swebp-slurm"
+version = "0.1.0"
+description = "Run SWE-Bench Pro generation and evaluation on a Slurm cluster using enroot containers"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Upstream Pro eval logic (swe_bench_pro_eval.py, helper_code/) needs these.
+    # `modal` and `docker` are deliberately NOT listed: swe_bench_pro_eval imports
+    # them under try/except and only uses them for the Modal / local-Docker
+    # backends, neither of which this enroot path touches.
+    "datasets>=2.14.0",
+    "huggingface-hub>=0.16.0",
+    "pandas>=1.5.0",
+    "tqdm>=4.64.0",
+    # Drives generation and supplies EnrootEnvironment,
+    # ThinkStrippingLitellmModel and the swebench_pro.yaml agent config.
+    "mini-swe-agent",
+    # Used directly by swebp_slurm/ (also transitive via mini-swe-agent).
+    "typer",
+    "jinja2",
+    "pyyaml",
+]
+
+[tool.uv.sources]
+# The cluster fork. Pinned to the branch rather than a tag so an EnrootEnvironment
+# fix lands here on the next `uv lock --upgrade-package mini-swe-agent`.
+mini-swe-agent = { git = "ssh://git@github.com/cdfhalle/mini-swe-agent.git", branch = "enroot-cluster" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# swe_bench_pro_eval and helper_code are upstream's, at the repo root; including
+# them here is what lets swebp_slurm import them without any sys.path handling.
+packages = ["swebp_slurm", "helper_code"]
+only-include = ["swebp_slurm", "helper_code", "swe_bench_pro_eval.py"]

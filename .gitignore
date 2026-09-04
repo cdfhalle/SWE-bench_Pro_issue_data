@@ -171,3 +171,33 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# ---------------------------------------------------------------- enroot/Slurm
+# mini-swe-agent config: model API key + ENROOT_* storage paths. Never commit.
+.env
+
+# Generated enroot sysconf mirror (host-coupled absolute symlinks; rebuilt by
+# slurm/setup_enroot_sysconf.sh, and MUST be rebuilt if this repo moves).
+enroot_sysconf/
+
+# Slurm job logs; keep the directory so every --output has a target.
+# `logs` and `.env.*` are ignored higher up in this file, so both need an
+# explicit un-ignore (a negation cannot rescue a file whose parent dir is
+# excluded, hence `!logs/` before `!logs/.gitkeep`).
+!logs/
+logs/*
+!logs/.gitkeep
+
+# The template is safe to commit; the real .env (API key + PATs) is not.
+!.env.example
+
+# All run artifacts: instances.jsonl, gen/eval shards, patches.json, results.json
+runs/
+
+# Gold patch reference set (input for the gold sanity check)
+gold_patches/
+
+# Safety net for tools run with default root-relative paths
+instances*.jsonl
+patches*.json
+results*.json
