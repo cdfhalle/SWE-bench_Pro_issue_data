@@ -54,17 +54,17 @@ MODEL="${MODEL:-openrouter/deepseek/deepseek-v4-flash}"
 # The serving job runs on a different node each time, so rather than hardcoding a
 # hostname we read the endpoint descriptor the serving repo writes (and deletes on
 # exit). ENDPOINT_JSON=<path> overrides; an explicit API_BASE wins over both.
-ENDPOINT_JSON="${ENDPOINT_JSON:-$SWEBP_ENDPOINT_JSON}"
-if [ -z "${API_BASE:-}" ] && [ -f "$ENDPOINT_JSON" ]; then
-  API_BASE=$("$SWEBP_PYTHON" -c "
-import json,sys
-try:
-    d=json.load(open('$ENDPOINT_JSON'))
-    print(d['base_url'] if d.get('ready') else '')
-except Exception:
-    print('')
-" 2>/dev/null | tail -1)
-  [ -n "$API_BASE" ] && echo "discovered endpoint from $ENDPOINT_JSON: $API_BASE"
+ENDPOINT_JSON="${ENDPOINT_JSON:-${SWEBP_ENDPOINT_JSON:-}}"
+ENDPOINT_DIR="${ENDPOINT_DIR:-${SWEBP_ENDPOINT_DIR:-}}"
+if [ -z "${API_BASE:-}" ] && { [ -n "$ENDPOINT_JSON" ] || [ -n "$ENDPOINT_DIR" ]; }; then
+  # The serving repo writes one descriptor per model (endpoint-<key>.json), so
+  # scan the directory and take the newest that reports ready. An exact file
+  # passed as ENDPOINT_JSON wins outright.
+  read -r API_BASE SERVED_MODEL ENDPOINT_SRC < <("$SWEBP_PYTHON" "$SWEBP_REPO/swebp_slurm/find_endpoint.py" \
+        --file "$ENDPOINT_JSON" --dir "$ENDPOINT_DIR" 2>/dev/null)
+  if [ -n "${API_BASE:-}" ]; then
+    echo "discovered endpoint from $ENDPOINT_SRC: $API_BASE (model=$SERVED_MODEL)"
+  fi
 fi
 
 if [ -n "${API_BASE:-}" ]; then

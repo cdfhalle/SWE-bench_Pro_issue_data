@@ -24,9 +24,13 @@ SWEBP_CONSTRAINT="${SWEBP_CONSTRAINT:-ARCH:X86}"
 # Python for the harness itself (not the container's interpreter).
 SWEBP_PYTHON="${SWEBP_PYTHON:-$SWEBP_REPO/.venv/bin/python}"
 
-# Endpoint descriptor written by the model-serving repo; read by gen_array to
+# Endpoint descriptors written by the model-serving repo; read by gen_array to
 # discover a self-hosted OpenAI-compatible server without hardcoding a hostname.
-SWEBP_ENDPOINT_JSON="${SWEBP_ENDPOINT_JSON:-$HOME/projects/model-hosting/endpoint/endpoint.json}"
+# That repo writes one file per model (endpoint-<model_key>.json), so the
+# DIRECTORY is the stable thing to point at: gen_array picks the newest
+# descriptor reporting ready. SWEBP_ENDPOINT_JSON pins one exact file instead.
+SWEBP_ENDPOINT_DIR="${SWEBP_ENDPOINT_DIR:-$HOME/projects/model-hosting/endpoint}"
+SWEBP_ENDPOINT_JSON="${SWEBP_ENDPOINT_JSON:-}"
 
 export SWEBP_REPO SWEBP_IMAGES_DIR SWEBP_ACCOUNT SWEBP_PARTITION SWEBP_CONSTRAINT \
-       SWEBP_PYTHON SWEBP_ENDPOINT_JSON
+       SWEBP_PYTHON SWEBP_ENDPOINT_DIR SWEBP_ENDPOINT_JSON
