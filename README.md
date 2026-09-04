@@ -162,3 +162,147 @@ To reproduce leaderboard results end-to-end, follow the following steps:
 4. Run the evaluation script `swe_bench_pro_eval.py` to run the evaluation script.
 
 
+
+---
+
+# Running on Slurm + enroot (`enroot-slurm` branch)
+
+> This section documents a fork addition. It is not part of upstream SWE-Bench Pro.
+
+Upstream runs evaluation on **Modal** or **local Docker**. Many HPC clusters offer
+neither: containers run under [enroot](https://github.com/NVIDIA/enroot) (unprivileged,
+squashfs-based) and work is scheduled with **Slurm**. This branch adds that third
+backend and the batch orchestration around it, while **reusing upstream's eval logic
+unchanged** — `swe_bench_pro_eval.create_entryscript`, `assemble_workspace_files`,
+the parser, `helper_code/` — so results stay comparable.
+
+Generation is driven by [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent).
+The container backend, the reasoning-trace model wrapper and the Pro agent config live
+in a companion fork, [`cdfhalle/mini-swe-agent`](https://github.com/cdfhalle/mini-swe-agent)
+branch `enroot-cluster`, which this repo depends on. The dependency is one-way: that
+fork knows nothing about SWE-Bench Pro.
+
+## Layout
+
+```
+swebp_slurm/
+  generate_instances.py    # materialize instances -> instances.jsonl (image_name + problem_statement baked in)
+  run_instance.py          # single-instance generation -> <out>/<iid>/<iid>.pred
+  run_eval.py              # single-instance evaluation  -> resolved / not resolved
+  summarize.py             # aggregate a batch run -> results.json + report
+  submit_batch.py          # submit the whole auto-chained pipeline (main entry point)
+  setup_dockerhub_creds.py # build per-account enroot credential dirs from .env
+slurm/
+  setup_enroot_sysconf.sh  # build the ENROOT_SYSCONF_PATH mirror (host-environment fixes)
+  stage_image.sh           # authenticated .sqsh pull with dh1 -> dh2 failover
+  gen_array.sbatch         # generation job array (stages each .sqsh on demand)
+  gather_patches.sbatch    # merge pred shards -> patches.json (upstream's gather_patches.py)
+  eval_array.sbatch        # eval job array (reads patches.json; deletes its image after)
+  summarize.sbatch         # results.json + report
+  cleanup.sbatch           # guaranteed end-of-run scratch sweep (afterany)
+  test_run_instance.sbatch / eval_instance.sbatch   # single-instance smoke tests
+runs/<run>/                # all artifacts for one run (gitignored)
+```
+
+## Setup
+
+```bash
+uv sync                                  # installs deps + the mini-swe-agent fork
+cp .env.example ~/.config/mini-swe-agent/.env    # then edit: API key, ENROOT_* paths
+bash slurm/setup_enroot_sysconf.sh       # build ./enroot_sysconf
+uv run python -m swebp_slurm.setup_dockerhub_creds
+```
+
+mini-swe-agent loads `~/.config/mini-swe-agent/.env` on import, which is how the
+`ENROOT_*` variables reach the environment before any `enroot` subprocess runs.
+
+**`ENROOT_DATA_PATH` must be node-local, exec-capable storage** (e.g. `/tmp`). The
+unpacked rootfs cannot be executed from GPFS/parallel scratch under unprivileged user
+namespaces — `/bin/sh` in the rootfs fails to exec. `ENROOT_CACHE_PATH` only holds
+imported `.sqsh` blobs, which are never exec'd, so it may live on shared scratch.
+
+**Image pulls must be authenticated.** Cluster nodes typically egress through one
+shared NAT IP whose anonymous DockerHub quota is permanently exhausted; authenticated
+pulls count against your account instead. `stage_image.sh` handles two enroot quirks:
+credentials are only sent when the registry is explicit in the URI
+(`docker://registry-1.docker.io#<image>`, not `docker://jefzda/...`), and a
+`.credentials` file holds a single account — so each account gets its own
+`ENROOT_CONFIG_PATH` and the helper fails over `dh1 -> dh2` at the rate limit.
+
+## Running the benchmark
+
+```bash
+uv run python -m swebp_slurm.submit_batch --run run100 --slice 0:100 --throttle 10
+```
+
+This submits one auto-chained pipeline:
+
+```
+gen array -> gather -> eval array -> summarize
+                                  \-> cleanup (afterany)
+```
+
+Every phase is a per-instance job array sized to the run's `instances.jsonl`.
+`--throttle` (the `%N` array limit) bounds how many `.sqsh` images sit on scratch at
+once. To generate against a self-hosted OpenAI-compatible endpoint, add
+`--api-base http://<host>:8000/v1 --model openai/<served-model-name>`.
+
+Results land in `runs/<run>/results.json`; per-task verdicts in
+`runs/<run>/eval_output/_status/`.
+
+### Single instance
+
+```bash
+uv run python -m swebp_slurm.run_instance <instance_id> --image <path.sqsh> \
+    --model openrouter/<model> --output generation_output
+uv run python -m swebp_slurm.run_eval <instance_id> --pred <path.pred> \
+    --image <path.sqsh> --output eval_output
+```
+
+`run_eval` exit codes: `0` resolved, `1` not resolved, `2` harness error. An instance
+counts as resolved iff `(FAIL_TO_PASS ∪ PASS_TO_PASS) ⊆ {PASSED}`, which is upstream's
+rule.
+
+### Gold sanity check
+
+Gold patches should each resolve their own instance, which makes them a good harness
+check that costs no LLM tokens and no image pulls if the `.sqsh` files are already
+staged.
+
+## Making enroot behave like Docker
+
+`enroot start -c` does not reproduce Docker's container environment out of the box.
+These are the gaps and where each is handled:
+
+| concern | fix | where |
+|---|---|---|
+| rootfs cannot exec from GPFS | keep rootfs on node-local `/tmp` | `.env` (`ENROOT_DATA_PATH`) |
+| repo is at `/app`, not `/testbed` | `cwd: /app` + `/app` in the prompt | `swebench_pro.yaml` (mini fork) |
+| image `ENV` (PATH/GOPATH) not applied — `go: command not found` | export `/etc/environment` before each command | `EnrootEnvironment.apply_image_env` (mini fork) |
+| no `--pwd` flag | prepend a shlex-quoted `cd` | `EnrootEnvironment` (mini fork) |
+| edits do not persist between commands | `enroot start --rw` | `EnrootEnvironment.start_args` (mini fork) |
+| `/scratch` mount warning spams every command | add `silent` to the fstab line | `setup_enroot_sysconf.sh` |
+| `localhost` resolves to IPv6 `::1`, but test servers bind IPv4 | bind an IPv4-only `/etc/hosts` | `setup_enroot_sysconf.sh` |
+| litellm has no price table for local/OpenRouter models | `MSWEA_COST_TRACKING=ignore_errors` | `gen_array.sbatch` |
+
+The last two host-environment fixes are applied via an `ENROOT_SYSCONF_PATH` mirror of
+`/etc/enroot`, so they affect **every** container — generation and evaluation alike,
+which matters because the agent must work in the same environment it is scored in.
+
+> The mirror bakes an **absolute** path to its `/etc/hosts` into
+> `enroot_sysconf/mounts.d/20-config.fstab`. Re-run `setup_enroot_sysconf.sh` after
+> moving this checkout, or container networking silently breaks.
+
+## Cluster-specific values
+
+Paths and the Slurm account are currently hardcoded for one site: the checkout path in
+`slurm/*.sbatch`, the image directory (`/sc/scratch/<user>/swebp/images`), and
+`--account` / `--partition=cpu-batch` / `--constraint=ARCH:X86`. Adjust these for your
+cluster. Generation and evaluation are **CPU-only** — no GPU is ever requested; the
+model is reached over HTTP.
+
+## Note on the nested submodules
+
+This repo vendors `SWE-agent` and `mini-swe-agent` as submodules for upstream's own
+scaffold. **Neither is used by this path**, which depends on the packaged
+`cdfhalle/mini-swe-agent` fork instead. You can clone with `--no-recurse-submodules`.
