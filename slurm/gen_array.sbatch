@@ -77,17 +77,28 @@ if [ -n "${API_BASE:-}" ]; then
   # silent EMPTY_PATCH -- which is how a mid-run server crash cost most of a
   # batch: the run looked like a bad model rather than a dead endpoint.
   # SKIP_ENDPOINT_CHECK=1 bypasses (e.g. a server without /v1/models).
+  # Retry before giving up. A task that starts during a momentary server hiccup
+  # -- sglang busy, or the serving job being resubmitted -- would otherwise exit 2
+  # and, because gather depends on the array with afterok, cancel the rest of the
+  # pipeline. On a 731-instance run that discards hours of completed generation
+  # for a blip. Poll for ENDPOINT_WAIT_SECS (default 10 min) instead; a genuinely
+  # dead endpoint still fails the chain, which is what should happen.
   if [ -z "${SKIP_ENDPOINT_CHECK:-}" ]; then
-    code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 20 "$OPENAI_API_BASE/models" \
-             -H "Authorization: Bearer $OPENAI_API_KEY" 2>/dev/null)
-    code=${code:-000}
-    echo "endpoint preflight: GET $OPENAI_API_BASE/models -> $code"
-    if [ "$code" != "200" ]; then
-      echo "VERDICT: ENDPOINT_DOWN ${IID:-task-$SLURM_ARRAY_TASK_ID}"
-      mkdir -p "${OUT:-$RUN/generation_output}/_status"
-      echo "ENDPOINT_DOWN unknown" > "${OUT:-$RUN/generation_output}/_status/$SLURM_ARRAY_TASK_ID.txt"
-      exit 2
-    fi
+    deadline=$(( SECONDS + ${ENDPOINT_WAIT_SECS:-600} ))
+    while : ; do
+      code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 20 "$OPENAI_API_BASE/models" \
+               -H "Authorization: Bearer $OPENAI_API_KEY" 2>/dev/null)
+      code=${code:-000}
+      echo "endpoint preflight: GET $OPENAI_API_BASE/models -> $code"
+      [ "$code" = "200" ] && break
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        echo "VERDICT: ENDPOINT_DOWN ${IID:-task-$SLURM_ARRAY_TASK_ID}"
+        mkdir -p "${OUT:-$RUN/generation_output}/_status"
+        echo "ENDPOINT_DOWN unknown" > "${OUT:-$RUN/generation_output}/_status/$SLURM_ARRAY_TASK_ID.txt"
+        exit 2
+      fi
+      sleep 30
+    done
   fi
 fi
 

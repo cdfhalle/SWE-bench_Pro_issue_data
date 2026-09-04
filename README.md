@@ -328,6 +328,12 @@ Without this a dead server costs every task its full litellm retry ladder
 (4s…60s ×7) and then looks like an ordinary empty patch. `API_BASE` overrides the
 descriptor; `SKIP_ENDPOINT_CHECK=1` skips the probe.
 
+The probe polls for `ENDPOINT_WAIT_SECS` (default 600) before declaring the endpoint
+down. `gather` depends on the generation array with `afterok`, so a task that exits on
+a momentary hiccup cancels the rest of the pipeline — on a full 731-instance run that
+throws away hours of finished generation. Waiting rides out a busy server or a
+resubmitted serving job; an endpoint that is really gone still fails the chain.
+
 ### A note on `/tmp` inside containers
 
 `enroot start --rw` persists writes to the **rootfs**, so edits under `/app` survive
