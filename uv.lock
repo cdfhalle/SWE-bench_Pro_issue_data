@@ -925,7 +925,7 @@ wheels = [
 [[package]]
 name = "mini-swe-agent"
 version = "2.4.6"
-source = { git = "ssh://git@github.com/cdfhalle/mini-swe-agent.git?branch=enroot-cluster#ebda5f8075aa1429a2609676907a0b61c42bdb5f" }
+source = { git = "ssh://git@github.com/cdfhalle/mini-swe-agent.git?branch=enroot-cluster#fca67e4d31bfd13074537958753bd411f9d65d43" }
 dependencies = [
     { name = "datasets" },
     { name = "jinja2" },
