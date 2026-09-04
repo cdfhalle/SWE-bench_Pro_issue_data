@@ -295,11 +295,45 @@ which matters because the agent must work in the same environment it is scored i
 
 ## Cluster-specific values
 
-Paths and the Slurm account are currently hardcoded for one site: the checkout path in
-`slurm/*.sbatch`, the image directory (`/sc/scratch/<user>/swebp/images`), and
-`--account` / `--partition=cpu-batch` / `--constraint=ARCH:X86`. Adjust these for your
-cluster. Generation and evaluation are **CPU-only** — no GPU is ever requested; the
-model is reached over HTTP.
+All site settings live in **`config.sh`**, which every `slurm/*.sbatch` sources, and
+every value is environment-overridable:
+
+| variable | default | meaning |
+|---|---|---|
+| `SWEBP_REPO` | this checkout | repo path; jobs also accept `SLURM_SUBMIT_DIR` |
+| `SWEBP_IMAGES_DIR` | `/sc/scratch/$USER/swebp/images` | staged `.sqsh` images |
+| `SWEBP_ACCOUNT` | `sci-maalej-swe-bench` | Slurm account |
+| `SWEBP_PARTITION` / `SWEBP_CONSTRAINT` | `cpu-batch` / `ARCH:X86` | where jobs land |
+| `SWEBP_PYTHON` | `$SWEBP_REPO/.venv/bin/python` | harness interpreter |
+| `SWEBP_ENDPOINT_JSON` | `~/projects/model-hosting/endpoint/endpoint.json` | self-hosted endpoint descriptor |
+
+```bash
+SWEBP_IMAGES_DIR=/somewhere/else sbatch slurm/gen_array.sbatch
+```
+
+Slurm parses `#SBATCH` directives before the job script runs, so account, partition
+and constraint cannot come from `config.sh` at that point; `submit_batch` passes them
+as command-line flags (which override the directives) when the variables are set, and
+the directives remain the defaults otherwise.
+
+Generation and evaluation are **CPU-only** — no GPU is ever requested; the model is
+reached over HTTP.
+
+### Self-hosted model endpoints
+
+`gen_array` reads `SWEBP_ENDPOINT_JSON` and uses its `base_url` when it reports
+`ready`, so the serving job's node is never hardcoded. It then preflights
+`GET <base>/models` and exits with an `ENDPOINT_DOWN` verdict if that is not `200`.
+Without this a dead server costs every task its full litellm retry ladder
+(4s…60s ×7) and then looks like an ordinary empty patch. `API_BASE` overrides the
+descriptor; `SKIP_ENDPOINT_CHECK=1` skips the probe.
+
+### A note on `/tmp` inside containers
+
+`enroot start --rw` persists writes to the **rootfs**, so edits under `/app` survive
+across agent steps. `/tmp` does not: it is a fresh tmpfs on every `enroot start`, so a
+file written there in one command is gone by the next. Agents should work in the repo,
+not in `/tmp`.
 
 ## Note on the nested submodules
 

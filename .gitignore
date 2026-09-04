@@ -201,3 +201,6 @@ gold_patches/
 instances*.jsonl
 patches*.json
 results*.json
+
+# Ad-hoc verification probes (scaffolding, not part of the pipeline)
+.verify/
