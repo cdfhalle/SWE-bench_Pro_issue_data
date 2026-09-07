@@ -302,6 +302,7 @@ every value is environment-overridable:
 |---|---|---|
 | `SWEBP_REPO` | this checkout | repo path; jobs also accept `SLURM_SUBMIT_DIR` |
 | `SWEBP_IMAGES_DIR` | `/sc/scratch/$USER/swebp/images` | staged `.sqsh` images |
+| `SWEBP_IMAGE_STORE` | `/sc/projects/sci-maalej/swe-bench/containers/swebench-pro` | read-only shared prebuilt images, checked before pulling (empty disables) |
 | `SWEBP_ACCOUNT` | `sci-maalej-swe-bench` | Slurm account |
 | `SWEBP_PARTITION` / `SWEBP_CONSTRAINT` | `cpu-batch` / `ARCH:X86` | where jobs land |
 | `SWEBP_PYTHON` | `$SWEBP_REPO/.venv/bin/python` | harness interpreter |
@@ -310,6 +311,27 @@ every value is environment-overridable:
 ```bash
 SWEBP_IMAGES_DIR=/somewhere/else sbatch slurm/gen_array.sbatch
 ```
+
+### Shared prebuilt image store
+
+`SWEBP_IMAGE_STORE` points at a group-readable directory of prebuilt `.sqsh` images on
+project storage (backed up), holding the full 731-instance dataset. Both arrays resolve
+it *before* staging, so a run only pulls what the store is missing — which matters
+because all nodes egress through one NAT IP and the combined authenticated DockerHub
+budget is ~400 pulls/6h across the `dh1`/`dh2` accounts.
+
+A store hit needs no copy to scratch: `enroot create` reads the `.sqsh` in place. The
+squashfs is never written to at run time (`enroot create` unpacks into a private rootfs
+under `$ENROOT_DATA_PATH`), so concurrent runs against the same store are safe.
+
+The store is **read-only** — mode 2750, owned by the publisher — and images resolved
+from it are exempt from the post-eval `rm` and from `cleanup.sbatch`. Setting
+`IMAGES_DIR` to the store makes those jobs refuse to run rather than delete shared data.
+Set `SWEBP_IMAGE_STORE=` (empty) to ignore the store and always pull from DockerHub.
+
+Republish with `slurm/publish_images.sbatch`; regenerate `manifest.tsv` and
+`sha256sums.txt` with `slurm/checksum_images.sbatch`. See the store's own `README.md`
+for consumer-side setup (`ARCH:X86`, node-local `ENROOT_DATA_PATH`, `ENROOT_MOUNT_HOME=n`).
 
 Slurm parses `#SBATCH` directives before the job script runs, so account, partition
 and constraint cannot come from `config.sh` at that point; `submit_batch` passes them

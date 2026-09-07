@@ -14,6 +14,30 @@
 DH1_CONFIG="${DH1_CONFIG:-$HOME/.config/enroot-dh1}"
 DH2_CONFIG="${DH2_CONFIG:-$HOME/.config/enroot-dh2}"
 
+# Prebuilt images published to the group's shared store (see slurm/publish_images.sbatch)
+# are usable as-is: enroot create reads the .sqsh directly, so a store hit needs no copy
+# to scratch. The store is read-only (mode 2750, owned by the publisher), which is why
+# callers must track WHERE the image came from and never rm a store path.
+#
+# store_image <sqsh_base> -- prints the store path and returns 0 on a hit, else returns 1.
+store_image() {
+  local p="${SWEBP_IMAGE_STORE:-}/$1.sqsh"
+  [ -n "${SWEBP_IMAGE_STORE:-}" ] && [ -r "$p" ] && { echo "$p"; return 0; }
+  return 1
+}
+
+# Guard for anything that deletes from IMAGES_DIR. Pointing IMAGES_DIR at the shared
+# store would make a routine run wipe the group's cache; refuse instead.
+assert_images_dir_not_store() {
+  local d="${1:-}"
+  [ -n "${SWEBP_IMAGE_STORE:-}" ] || return 0
+  if [ "$(readlink -f "$d")" = "$(readlink -f "$SWEBP_IMAGE_STORE")" ]; then
+    echo "REFUSING: IMAGES_DIR ($d) is the shared image store -- it is not ours to delete" >&2
+    return 1
+  fi
+  return 0
+}
+
 stage_image() {  # $1=dest .sqsh  $2=image_name (jefzda/sweap-images:<tag>)
   local dest="$1" uri="docker://registry-1.docker.io#$2" cfg
   for cfg in "$DH1_CONFIG" "$DH2_CONFIG"; do

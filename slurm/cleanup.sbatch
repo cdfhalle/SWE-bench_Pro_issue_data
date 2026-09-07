@@ -26,6 +26,10 @@ RUN="${RUN:-runs/default}"
 INSTANCES="${INSTANCES:-$RUN/instances.jsonl}"
 IMAGES_DIR="${IMAGES_DIR:-$SWEBP_IMAGES_DIR}"
 
+# The sweep is a bulk delete; refuse outright if it has been aimed at the shared store.
+source slurm/stage_image.sh
+assert_images_dir_not_store "$IMAGES_DIR" || exit 1
+
 echo "sweeping images for '$INSTANCES' from '$IMAGES_DIR'"
 "$SWEBP_PYTHON" -c "
 import json, os

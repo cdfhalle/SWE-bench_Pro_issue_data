@@ -15,6 +15,14 @@ SWEBP_REPO="${SWEBP_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # scratch, which is NOT backed up and may be purged without warning.
 SWEBP_IMAGES_DIR="${SWEBP_IMAGES_DIR:-/sc/scratch/$USER/swebp/images}"
 
+# Read-only shared store of prebuilt images on project storage (backed up, group
+# readable). Resolved BEFORE staging from DockerHub, so a run only pulls what the
+# store is missing. Set empty to disable and always stage from DockerHub.
+#
+# It must NEVER equal SWEBP_IMAGES_DIR: the arrays and cleanup.sbatch delete from
+# that one, and the store is shared group data. The sbatch scripts assert this.
+SWEBP_IMAGE_STORE="${SWEBP_IMAGE_STORE-/sc/projects/sci-maalej/swe-bench/containers/swebench-pro}"
+
 # Slurm submission. Generation and evaluation are CPU-only: the model is reached
 # over HTTP, so no GPU is ever requested.
 SWEBP_ACCOUNT="${SWEBP_ACCOUNT:-sci-maalej-swe-bench}"
@@ -32,5 +40,5 @@ SWEBP_PYTHON="${SWEBP_PYTHON:-$SWEBP_REPO/.venv/bin/python}"
 SWEBP_ENDPOINT_DIR="${SWEBP_ENDPOINT_DIR:-$HOME/projects/model-hosting/endpoint}"
 SWEBP_ENDPOINT_JSON="${SWEBP_ENDPOINT_JSON:-}"
 
-export SWEBP_REPO SWEBP_IMAGES_DIR SWEBP_ACCOUNT SWEBP_PARTITION SWEBP_CONSTRAINT \
+export SWEBP_REPO SWEBP_IMAGES_DIR SWEBP_IMAGE_STORE SWEBP_ACCOUNT SWEBP_PARTITION SWEBP_CONSTRAINT \
        SWEBP_PYTHON SWEBP_ENDPOINT_DIR SWEBP_ENDPOINT_JSON

@@ -118,7 +118,13 @@ import json
 r = json.loads(open('$INSTANCES').read().splitlines()[$SLURM_ARRAY_TASK_ID])
 print(r['instance_id'], r['image_name'], r['sqsh_base'])
 ")
-SQSH="$IMAGES_DIR/$SQSH_BASE.sqsh"
+# Prefer the group's shared prebuilt store; only pull from DockerHub on a miss.
+# FROM_STORE is non-empty for a store hit, which makes the image undeletable below.
+if SQSH="$(store_image "$SQSH_BASE")"; then
+  FROM_STORE=1
+else
+  SQSH="$IMAGES_DIR/$SQSH_BASE.sqsh"; FROM_STORE=
+fi
 
 echo "===== gen task $SLURM_ARRAY_TASK_ID  node=$(hostname) ====="
 echo "iid=$IID"
@@ -127,7 +133,9 @@ echo "sqsh=$SQSH"
 
 if [ -z "$IID" ]; then echo "could not read instance line"; record READ_FAIL; exit 0; fi
 
-if [ ! -f "$SQSH" ]; then
+if [ -n "$FROM_STORE" ]; then
+  echo "image from shared store (no DockerHub pull)"
+elif [ ! -f "$SQSH" ]; then
   echo "staging (authenticated): $IMAGE_NAME"
   if ! stage_image "$SQSH" "$IMAGE_NAME"; then
     echo "STAGE FAILED (both DockerHub accounts)"; rm -f "$SQSH"; record STAGE_FAIL; exit 0
