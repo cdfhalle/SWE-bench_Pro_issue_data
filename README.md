@@ -165,7 +165,7 @@ To reproduce leaderboard results end-to-end, follow the following steps:
 
 ---
 
-# Running on Slurm + enroot (`enroot-slurm` branch)
+# Running on Slurm + enroot
 
 > This section documents a fork addition. It is not part of upstream SWE-Bench Pro.
 
