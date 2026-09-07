@@ -124,29 +124,37 @@ def build_config(
     return config
 
 
-def run_setup_command(env, instance: dict) -> None:
-    """Run the instance's ``before_repo_set_cmd`` to reset the repo to its base
-    state (base_commit + the gold test files). This mirrors mini's
-    ``env_startup_command`` step, and is the runner's job because the command is
-    a dataset field, not environment mechanics.
+def assert_repo_at_base(env, instance: dict) -> None:
+    """Fail unless the image has /app checked out at the instance's base_commit.
 
-    ``EnrootEnvironment.execute`` already runs commands in ``env.config.cwd``
-    (it prepends a ``cd`` -- the enroot analog of docker's ``-w``), so we do not
-    re-handle the working directory here. We only prepend ``set -e`` so a failing
-    git step is surfaced rather than masked by the dataset command's trailing
-    newline (which would otherwise let bash exit 0 even if a reset step failed).
+    Generation deliberately runs *no* setup command. Neither upstream does: the
+    Pro harness hands the agent only image_name / problem_statement /
+    instance_id / base_commit / repo_name (helper_code/generate_sweagent_instances.py),
+    and mini leaves its `run.env_startup_command` hook unset in every SWE-bench
+    config. Both rely on the image already being at base, which it is.
+
+    In particular the dataset's ``before_repo_set_cmd`` must never run here. Its
+    final line is ``git checkout <fix_sha> -- <test files>``, which restores the
+    gold, post-fix tests; upstream splices exactly that line into the *eval*
+    entryscript after ``git apply`` (swe_bench_pro_eval.py, create_entryscript).
+    Running the field before the agent staged the FAIL_TO_PASS tests into the
+    working tree, and agents coded against the assertions they found there --
+    that is what scored runs/baseline-full 689/731 (94.3%).
+
+    So verify the precondition instead of re-establishing it. A wrong image is a
+    silent scoring bug of the same family, and is worth failing loudly over.
     """
-    setup = instance.get("before_repo_set_cmd", "").strip()
-    if not setup:
-        logger.info("No before_repo_set_cmd for this instance; skipping setup.")
-        return
-    rendered = Template(setup, undefined=StrictUndefined).render(**instance)
-    logger.info(f"Running before_repo_set_cmd in {env.config.cwd}...")
-    out = env.execute({"command": f"set -e\n{rendered}"}, timeout=600)
+    base = instance["base_commit"]
+    out = env.execute({"command": "git rev-parse HEAD"})
     if out["returncode"] != 0:
+        raise RuntimeError(f"could not read HEAD in {env.config.cwd}: {out['output']}")
+    head = out["output"].strip()
+    if head != base:
         raise RuntimeError(
-            f"before_repo_set_cmd failed (rc={out['returncode']}):\n{out['output']}"
+            f"image has {env.config.cwd} at {head}, expected base_commit {base}; "
+            "refusing to generate against an unexpected tree"
         )
+    logger.info(f"Verified {env.config.cwd} is at base_commit {base}")
 
 
 def write_outputs(
@@ -206,7 +214,7 @@ def main(
     step_limit: int | None = typer.Option(None, "--step-limit", help="Override agent step limit", rich_help_panel="Advanced"),
     cost_limit: float | None = typer.Option(None, "-l", "--cost-limit", help="Override agent cost limit (USD)", rich_help_panel="Advanced"),
     config_path: Path = typer.Option(DEFAULT_CONFIG, "-c", "--config", help="mini config file to base the run on", rich_help_panel="Advanced"),
-    setup: bool = typer.Option(True, "--setup/--no-setup", help="Run the instance's before_repo_set_cmd before the agent", rich_help_panel="Advanced"),
+    setup: bool = typer.Option(True, "--setup/--no-setup", help="Verify the image is checked out at the instance's base_commit before the agent runs", rich_help_panel="Advanced"),
 ) -> None:
     # fmt: on
     """Generate a patch for one SWE-Bench Pro instance with mini + enroot."""
@@ -241,7 +249,7 @@ def main(
 
     env = get_environment(config["environment"])
     if setup:
-        run_setup_command(env, instance)
+        assert_repo_at_base(env, instance)
 
     agent = DefaultAgent(get_model(config=config.get("model", {})), env, **config.get("agent", {}))
 
