@@ -23,9 +23,10 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-# The cluster fork. Pinned to the branch rather than a tag so an EnrootEnvironment
-# fix lands here on the next `uv lock --upgrade-package mini-swe-agent`.
-mini-swe-agent = { git = "ssh://git@github.com/cdfhalle/mini-swe-agent.git", branch = "enroot-cluster" }
+# The cluster fork. Pinned to its default branch rather than a tag so an
+# EnrootEnvironment fix lands here on the next
+# `uv lock --upgrade-package mini-swe-agent`.
+mini-swe-agent = { git = "ssh://git@github.com/cdfhalle/mini-swe-agent.git", branch = "main" }
 
 [dependency-groups]
 dev = [

@@ -178,9 +178,9 @@ the parser, `helper_code/` — so results stay comparable.
 
 Generation is driven by [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent).
 The container backend, the reasoning-trace model wrapper and the Pro agent config live
-in a companion fork, [`cdfhalle/mini-swe-agent`](https://github.com/cdfhalle/mini-swe-agent)
-branch `enroot-cluster`, which this repo depends on. The dependency is one-way: that
-fork knows nothing about SWE-Bench Pro.
+in a companion fork, [`cdfhalle/mini-swe-agent`](https://github.com/cdfhalle/mini-swe-agent),
+on its default branch `main`, which this repo depends on. The dependency is one-way:
+that fork knows nothing about SWE-Bench Pro.
 
 ## Layout
 
