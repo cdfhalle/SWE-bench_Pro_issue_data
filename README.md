@@ -263,6 +263,58 @@ uv run python -m swebp_slurm.run_eval <instance_id> --pred <path.pred> \
 counts as resolved iff `(FAIL_TO_PASS ∪ PASS_TO_PASS) ⊆ {PASSED}`, which is upstream's
 rule.
 
+### Issue-tracker access (the `--gh-context` experiment)
+
+An opt-in treatment arm that lets the agent read its repository's GitHub issue
+tracker *as it stood at the instance's base commit*, to measure what that context is
+worth. Leave it off and nothing changes: the baseline prompt and code path are
+untouched.
+
+A `gh-gateway` job holds the token, calls `api.github.com` on demand and applies the
+filters on the host, where the agent cannot reach them. Inside the container the agent
+gets a `gh` command (`search` / `show` / `diff`) and no credential.
+
+```bash
+sbatch --export=ALL,RUN=ghctx-on slurm/gh_gateway.sbatch    # start it FIRST
+uv run python -m swebp_slurm.submit_batch --run ghctx-on --slice 0:100 --throttle 10 --gh-context
+uv run python -m swebp_slurm.gh_gateway audit runs/ghctx-on # after the run
+```
+
+Needs `GITHUB_TOKEN` in `~/.config/mini-swe-agent/.env` (unauthenticated is 60
+requests/hour). Gen tasks record `GH_GATEWAY_DOWN` and stop rather than quietly running
+as baseline if the gateway is not answering.
+
+What the gateway will not serve:
+
+- anything outside the instance's own repository, or created at/after the base commit
+  (`created:` is injected into every search; any `repo:`/`created:` the agent supplies
+  is stripped first);
+- the pull request that produced the fix. Its sha is embedded in the `instance_id`,
+  and it is usually *open before* the cutoff -- for `instance_NodeBB__NodeBB-04998908…`
+  the fix lands 7 hours after the base commit as PR #11677 -- so a time filter alone
+  would hand over the gold patch. Mentions of it (`#11677`, the sha) are dropped too;
+- comments whose `updated_at` is after the cutoff. The rule is an inclusion one: if the
+  last edit predates the cutoff, the body the API returns today *is* the body that
+  existed then, so pre-cutoff edits are served and are exactly faithful;
+- issue/PR bodies edited after the cutoff. `updated_at` says nothing about a body (it
+  bumps on any activity), so the real edit history is read via GraphQL and an
+  unreconstructable body is omitted rather than guessed;
+- diffs of PRs still open at the cutoff, unless the gateway ran with `DIFFS=1` -- and
+  then only up to the last commit that predates it. PRs merged before the cutoff need
+  no API call at all: their merge commit is already an ancestor of the checked-out
+  tree, so `gh show` just points at `git show <sha>`.
+
+Reproducibility comes from the cache, not from pre-downloading: every upstream response
+is stored by URL under `$SWEBP_GH_CACHE`, so a rerun replays, and `REPLAY=1` serves only
+from cache and never calls GitHub. Every agent-facing request is logged to
+`runs/<run>/gh_log/`, which is what `audit` checks against each instance's gold patch --
+fix-sha, fix-PR and post-cutoff hits are fatal, gold-patch line hits are reported for
+inspection. The log also shows whether the tracker was used at all, without which a null
+result means nothing.
+
+Run the arms paired, against the same endpoint, by copying the baseline's
+`instances.jsonl` into the treatment run directory before submitting.
+
 ### Gold sanity check
 
 Gold patches should each resolve their own instance, which makes them a good harness

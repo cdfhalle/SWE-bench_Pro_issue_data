@@ -133,6 +133,28 @@ echo "sqsh=$SQSH"
 
 if [ -z "$IID" ]; then echo "could not read instance line"; record READ_FAIL; exit 0; fi
 
+# Issue-tracker arm. Discover this run's gh-gateway the way the model endpoint is
+# discovered, and FAIL the task if it does not answer: a treatment task that
+# silently fell back to baseline behaviour would be indistinguishable from a
+# genuine null result, which is the worst outcome this experiment can produce.
+GH_ARGS=()
+if [ -n "${GH_CONTEXT:-}" ]; then
+  GH_URL="${SWEBP_GH_URL:-}"
+  if [ -z "$GH_URL" ]; then
+    GH_URL=$("$SWEBP_PYTHON" -c "
+import json, pathlib
+p = pathlib.Path('${SWEBP_GH_ENDPOINT_DIR:-endpoint}') / ('gh-gateway-' + '${RUN}'.rsplit('/', 1)[-1] + '.json')
+d = json.loads(p.read_text()) if p.exists() else {}
+print(d.get('base_url', '') if d.get('ready') else '')
+" 2>/dev/null)
+  fi
+  if [ -z "$GH_URL" ] || ! curl -sf --max-time 20 "$GH_URL/health" >/dev/null 2>&1; then
+    echo "gh-gateway for $RUN not reachable (url='${GH_URL}')"; record GH_GATEWAY_DOWN; exit 0
+  fi
+  echo "gh-gateway=$GH_URL"
+  GH_ARGS=(--gh-context --gh-url "$GH_URL")
+fi
+
 if [ -n "$FROM_STORE" ]; then
   echo "image from shared store (no DockerHub pull)"
 elif [ ! -f "$SQSH" ]; then
@@ -147,7 +169,8 @@ fi
 "$SWEBP_PYTHON" -m swebp_slurm.run_instance \
   --instances-file "$INSTANCES" --index "$SLURM_ARRAY_TASK_ID" \
   --image "$SQSH" --model "$MODEL" --output "$OUT" \
-  ${STEP_LIMIT:+--step-limit "$STEP_LIMIT"}
+  ${STEP_LIMIT:+--step-limit "$STEP_LIMIT"} \
+  ${GH_ARGS[@]+"${GH_ARGS[@]}"}
 rc=$?
 
 PRED="$OUT/$IID/$IID.pred"

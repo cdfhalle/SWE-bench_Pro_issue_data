@@ -204,3 +204,7 @@ results*.json
 
 # Ad-hoc verification probes (scaffolding, not part of the pipeline)
 .verify/
+
+# gh-gateway endpoint descriptors: runtime state (host/port of a live job),
+# written on bind and removed on exit. Same contract as the serving repo's.
+endpoint/

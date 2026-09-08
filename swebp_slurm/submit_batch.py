@@ -62,6 +62,7 @@ def main(
     throttle: int = typer.Option(10, "--throttle", help="Max concurrent array tasks (bounds staged images on scratch)"),
     api_base: str = typer.Option("", "--api-base", help="OpenAI-compatible base URL for a locally-served model, e.g. http://gx32:8000/v1 (use with --model openai/<served-name>). Match --throttle to the server's --max-running-requests."),
     keep_images: bool = typer.Option(False, "--keep-images", help="Keep the staged .sqsh images: eval does not delete its own, and no cleanup job is submitted. Use when re-running a subset whose images are already staged (re-pulling costs DockerHub rate-limit budget)."),
+    gh_context: bool = typer.Option(False, "--gh-context", help="Treatment arm: give each agent read-only access to its repo's issue tracker as it was at the base commit. Requires a running gh-gateway for this run (slurm/gh_gateway.sbatch); gen tasks fail rather than silently run as baseline."),
 ) -> None:
     """Materialize instances and submit the gen -> gather -> eval -> summarize chain."""
     run = run or datetime.now().strftime("run-%Y%m%d-%H%M")
@@ -86,7 +87,8 @@ def main(
     print(f"run: {run_rel}   instances: {n}   (array {array})")
 
     gen = sbatch("gen_array.sbatch", f"--array={array}", RUN=run_rel, MODEL=model,
-                 **({"API_BASE": api_base} if api_base else {}))
+                 **({"API_BASE": api_base} if api_base else {}),
+                 **({"GH_CONTEXT": "1"} if gh_context else {}))
     gather = sbatch("gather_patches.sbatch", f"--dependency=afterok:{gen}", RUN=run_rel)
     evl = sbatch("eval_array.sbatch", f"--array={array}", f"--dependency=afterok:{gather}", RUN=run_rel,
                  **({"KEEP_IMAGE": "1"} if keep_images else {}))

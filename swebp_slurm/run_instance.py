@@ -24,6 +24,7 @@ Prerequisites (see the project handover for the why):
 from __future__ import annotations
 
 import json
+import os
 import traceback
 from pathlib import Path
 
@@ -42,6 +43,8 @@ from minisweagent.utils.log import logger
 # Import (don't copy) the Pro fork's problem-statement builder so the prompt we
 # generate stays identical to the upstream harness's.
 from helper_code.create_problem_statement import create_problem_statement
+from swebp_slurm import gh_client
+from swebp_slurm.gh_gateway import fix_sha_from_instance_id
 
 DATASET = "ScaleAI/SWE-bench_Pro"
 # The Pro agent config ships with our mini-swe-agent fork as
@@ -157,6 +160,58 @@ def assert_repo_at_base(env, instance: dict) -> None:
     logger.info(f"Verified {env.config.cwd} is at base_commit {base}")
 
 
+def read_head_dates(env) -> tuple[str, str]:
+    """(committer date, author date) of the commit checked out in the container.
+
+    The tree the agent will actually edit is the authority for the cutoff. The
+    dataset carries no timestamps at all, and GitHub is asked only to confirm
+    that this really is the upstream base commit.
+    """
+    out = env.execute({"command": "git show -s --format=%cI%n%aI HEAD"})
+    if out["returncode"] != 0:
+        raise RuntimeError(f"could not read HEAD dates in {env.config.cwd}: {out['output']}")
+    committed, authored = out["output"].strip().splitlines()[:2]
+    return committed.strip(), authored.strip()
+
+
+def setup_gh_context(env, config: dict, instance: dict, gh_url: str, scratch: Path) -> dict:
+    """Register the instance with the gateway, install `gh`, extend the prompt.
+
+    The /etc/hosts mount is appended to the *live* environment config rather
+    than passed at construction time: EnrootEnvironment re-reads `mounts` on
+    every `execute()`, which is what lets this whole experiment leave the
+    mini-swe-agent fork untouched.
+    """
+    committed_at, authored_at = read_head_dates(env)
+    registration = gh_client.register(
+        gh_url,
+        {
+            "instance_id": instance["instance_id"],
+            "repo": instance["repo"],
+            "base_commit": instance["base_commit"],
+            "fix_sha": fix_sha_from_instance_id(instance["instance_id"]),
+            "head_committed_at": committed_at,
+            "head_authored_at": authored_at,
+        },
+    )
+    if warning := registration.get("warning"):
+        logger.warning(warning)
+    logger.info(
+        f"Issue tracker cut at {registration['cutoff']}, excluding PR {registration['fix_pr']} "
+        f"(resolved via {registration['fix_pr_source']})"
+    )
+
+    hosts = gh_client.write_hosts(
+        scratch / instance["instance_id"] / "hosts",
+        Path(os.environ["ENROOT_SYSCONF_PATH"]) if os.environ.get("ENROOT_SYSCONF_PATH") else None,
+        (os.environ.get("SWEBP_GH_BLOCK_HOSTS") or "").split() or None,
+    )
+    env.config.mounts.append(f"{hosts}:/etc/hosts:ro,bind,nosuid")
+    gh_client.install_client(env, gh_url, instance["instance_id"])
+    config["agent"]["instance_template"] += gh_client.PROMPT_BLOCK
+    return {"gh_cutoff": registration["cutoff"], "gh_budget": int(os.environ.get("SWEBP_GH_BUDGET", "40"))}
+
+
 def write_outputs(
     output_dir: Path,
     instance_id: str,
@@ -215,6 +270,9 @@ def main(
     cost_limit: float | None = typer.Option(None, "-l", "--cost-limit", help="Override agent cost limit (USD)", rich_help_panel="Advanced"),
     config_path: Path = typer.Option(DEFAULT_CONFIG, "-c", "--config", help="mini config file to base the run on", rich_help_panel="Advanced"),
     setup: bool = typer.Option(True, "--setup/--no-setup", help="Verify the image is checked out at the instance's base_commit before the agent runs", rich_help_panel="Advanced"),
+    gh_context: bool = typer.Option(False, "--gh-context", help="Give the agent read-only access to this repo's issue tracker as it was at the base commit", rich_help_panel="GitHub context"),
+    gh_url: str = typer.Option("", "--gh-url", help="Base URL of the gh-gateway (default $SWEBP_GH_URL)", rich_help_panel="GitHub context"),
+    gh_scratch: Path = typer.Option(None, "--gh-scratch", help="Node-local dir for the per-instance hosts file (default $SWEBP_GH_SCRATCH)", rich_help_panel="GitHub context"),
 ) -> None:
     # fmt: on
     """Generate a patch for one SWE-Bench Pro instance with mini + enroot."""
@@ -251,13 +309,23 @@ def main(
     if setup:
         assert_repo_at_base(env, instance)
 
+    run_kwargs: dict = {}
+    if gh_context:
+        run_kwargs = setup_gh_context(
+            env,
+            config,
+            instance,
+            gh_url or os.environ.get("SWEBP_GH_URL", ""),
+            gh_scratch or Path(os.environ.get("SWEBP_GH_SCRATCH", f"/tmp/{os.environ.get('USER', 'swebp')}/swebp-gh")),
+        )
+
     agent = DefaultAgent(get_model(config=config.get("model", {})), env, **config.get("agent", {}))
 
     exit_status: str | None = None
     patch: str = ""
     extra_info: dict | None = None
     try:
-        info = agent.run(task)
+        info = agent.run(task, **run_kwargs)
         exit_status = info.get("exit_status")
         patch = info.get("submission", "") or ""
     except Exception as e:  # noqa: BLE001 -- record and still write outputs

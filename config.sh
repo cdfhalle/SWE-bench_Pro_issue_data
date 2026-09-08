@@ -40,5 +40,37 @@ SWEBP_PYTHON="${SWEBP_PYTHON:-$SWEBP_REPO/.venv/bin/python}"
 SWEBP_ENDPOINT_DIR="${SWEBP_ENDPOINT_DIR:-$HOME/projects/model-hosting/endpoint}"
 SWEBP_ENDPOINT_JSON="${SWEBP_ENDPOINT_JSON:-}"
 
+# --- GitHub issue-tracker experiment (opt-in; unset => baseline behaviour) ---
+# One gh-gateway serves a whole run: it holds the token, applies the
+# same-repo/pre-cutoff filters, and is the single place the API rate limits are
+# accounted for. That last part is why it is a service and not per-task code --
+# the Search API allows 30 requests/minute per token, which a 10-wide array
+# would exhaust immediately. Discovery mirrors SWEBP_ENDPOINT_*: point at the
+# DIRECTORY of gh-gateway-<run>.json descriptors, or pin SWEBP_GH_URL.
+SWEBP_GH_ENDPOINT_DIR="${SWEBP_GH_ENDPOINT_DIR:-$SWEBP_REPO/endpoint}"
+SWEBP_GH_URL="${SWEBP_GH_URL:-}"
+
+# Upstream response cache: every GitHub reply is stored by URL, so a rerun is
+# served from here and `gh_gateway serve --replay` never touches the network at
+# all. On project storage because it IS the reproducibility record for a
+# published result -- scratch may be purged without warning.
+SWEBP_GH_CACHE="${SWEBP_GH_CACHE:-/sc/projects/sci-maalej/swe-bench/gh-cache}"
+
+# Node-local, and tiny: only the per-instance /etc/hosts overlay lives here.
+SWEBP_GH_SCRATCH="${SWEBP_GH_SCRATCH:-/tmp/$USER/swebp-gh}"
+
+# Tracker searches an agent may make per instance. As much experimental hygiene
+# as protection: an agent that burns the whole budget is a finding, not a bug.
+SWEBP_GH_BUDGET="${SWEBP_GH_BUDGET:-40}"
+
+# Hosts null-routed inside the container, to stop an agent going around the
+# gateway. Deliberately only the API host: enroot shares the host network
+# namespace, and blocking github.com wholesale would also break `npm install` /
+# `go get` of dependencies hosted there -- which would change the environment
+# for the treatment arm only and confound the A/B.
+SWEBP_GH_BLOCK_HOSTS="${SWEBP_GH_BLOCK_HOSTS:-api.github.com}"
+
 export SWEBP_REPO SWEBP_IMAGES_DIR SWEBP_IMAGE_STORE SWEBP_ACCOUNT SWEBP_PARTITION SWEBP_CONSTRAINT \
-       SWEBP_PYTHON SWEBP_ENDPOINT_DIR SWEBP_ENDPOINT_JSON
+       SWEBP_PYTHON SWEBP_ENDPOINT_DIR SWEBP_ENDPOINT_JSON \
+       SWEBP_GH_ENDPOINT_DIR SWEBP_GH_URL SWEBP_GH_CACHE SWEBP_GH_SCRATCH SWEBP_GH_BUDGET \
+       SWEBP_GH_BLOCK_HOSTS
