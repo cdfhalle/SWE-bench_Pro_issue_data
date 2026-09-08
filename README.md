@@ -306,7 +306,8 @@ every value is environment-overridable:
 | `SWEBP_ACCOUNT` | `sci-maalej-swe-bench` | Slurm account |
 | `SWEBP_PARTITION` / `SWEBP_CONSTRAINT` | `cpu-batch` / `ARCH:X86` | where jobs land |
 | `SWEBP_PYTHON` | `$SWEBP_REPO/.venv/bin/python` | harness interpreter |
-| `SWEBP_ENDPOINT_JSON` | `~/projects/model-hosting/endpoint/endpoint.json` | self-hosted endpoint descriptor |
+| `SWEBP_ENDPOINT_DIR` | `~/projects/model-hosting/endpoint` | directory of self-hosted endpoint descriptors; the newest one reporting `ready` wins |
+| `SWEBP_ENDPOINT_JSON` | *(empty)* | pin one exact descriptor file instead of scanning the directory |
 
 ```bash
 SWEBP_IMAGES_DIR=/somewhere/else sbatch slurm/gen_array.sbatch
@@ -343,9 +344,13 @@ reached over HTTP.
 
 ### Self-hosted model endpoints
 
-`gen_array` reads `SWEBP_ENDPOINT_JSON` and uses its `base_url` when it reports
-`ready`, so the serving job's node is never hardcoded. It then preflights
-`GET <base>/models` and exits with an `ENDPOINT_DOWN` verdict if that is not `200`.
+`gen_array` resolves a descriptor — `SWEBP_ENDPOINT_JSON` if pinned, otherwise the
+newest `endpoint*.json` under `SWEBP_ENDPOINT_DIR` that reports `ready` — and uses
+its `base_url`, so the serving job's node is never hardcoded. The serving repo
+writes one file per model (`endpoint-<model_key>.json`) and deletes it on exit,
+which is why the directory, not a filename, is the stable thing to point at.
+
+It then preflights `GET <base>/models` and exits with an `ENDPOINT_DOWN` verdict if that is not `200`.
 Without this a dead server costs every task its full litellm retry ladder
 (4s…60s ×7) and then looks like an ordinary empty patch. `API_BASE` overrides the
 descriptor; `SKIP_ENDPOINT_CHECK=1` skips the probe.
