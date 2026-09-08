@@ -33,9 +33,9 @@ from datasets import load_dataset
 # before enroot ever runs.
 from minisweagent.environments.enroot import EnrootEnvironment
 
+from swebp_slurm import DEFAULT_DOCKERHUB_USERNAME, DEFAULT_IMAGES_DIR
+
 DATASET = "ScaleAI/SWE-bench_Pro"
-DEFAULT_IMAGES_DIR = Path("/sc/scratch/conrad.halle/swebp/images")
-DEFAULT_DOCKERHUB_USERNAME = "jefzda"
 
 # This package is vendored into the SWE-Bench-Pro repo, so the eval logic and
 # the per-instance run_scripts/ + dockerfiles/ sit at the repo root and are

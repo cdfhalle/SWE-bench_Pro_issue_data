@@ -42,6 +42,7 @@ from minisweagent.utils.log import logger
 # Import (don't copy) the Pro fork's problem-statement builder so the prompt we
 # generate stays identical to the upstream harness's.
 from helper_code.create_problem_statement import create_problem_statement
+from swebp_slurm import DEFAULT_IMAGES_DIR
 
 DATASET = "ScaleAI/SWE-bench_Pro"
 # The Pro agent config ships with our mini-swe-agent fork as
@@ -49,7 +50,6 @@ DATASET = "ScaleAI/SWE-bench_Pro"
 # that benchmarks/ directory, so a bare name resolves it wherever mini is
 # installed; a path to a local file still overrides it.
 DEFAULT_CONFIG = Path("swebench_pro.yaml")
-DEFAULT_IMAGES_DIR = Path("/sc/scratch/conrad.halle/swebp/images")
 
 app = typer.Typer(rich_markup_mode="rich", add_completion=False)
 

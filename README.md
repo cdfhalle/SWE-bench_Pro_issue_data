@@ -178,7 +178,8 @@ the parser, `helper_code/` — so results stay comparable.
 
 Generation is driven by [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent).
 The container backend, the reasoning-trace model wrapper and the Pro agent config live
-in a companion fork, [`cdfhalle/mini-swe-agent`](https://github.com/cdfhalle/mini-swe-agent),
+in a companion fork, [`cdfhalle/mini-swe-agent`](https://github.com/cdfhalle/mini-swe-agent)
+(public, fetched over HTTPS — no credentials needed),
 on its default branch `main`, which this repo depends on. The dependency is one-way:
 that fork knows nothing about SWE-Bench Pro.
 
@@ -192,6 +193,8 @@ swebp_slurm/
   summarize.py             # aggregate a batch run -> results.json + report
   submit_batch.py          # submit the whole auto-chained pipeline (main entry point)
   setup_dockerhub_creds.py # build per-account enroot credential dirs from .env
+bin/
+  setup.sh                 # one-shot per-user setup (enroot_sysconf/ + ~/.config/mini-swe-agent/.env)
 slurm/
   setup_enroot_sysconf.sh  # build the ENROOT_SYSCONF_PATH mirror (host-environment fixes)
   stage_image.sh           # authenticated .sqsh pull with dh1 -> dh2 failover
@@ -206,28 +209,61 @@ runs/<run>/                # all artifacts for one run (gitignored)
 
 ## Setup
 
+### Prerequisites
+
+- **Membership of the `sci-maalej-swe-bench` Slurm account and Unix group.** The
+  group gets you both the compute account and read access to the shared image
+  store at `/sc/projects/sci-maalej/swe-bench/containers/swebench-pro`, which
+  holds a prebuilt `.sqsh` for every one of the 731 instances. Not in the group?
+  See [Cluster-specific values](#cluster-specific-values) — set `SWEBP_ACCOUNT`
+  to your own account and `SWEBP_IMAGE_STORE=` (empty) to stage from DockerHub
+  instead.
+- **`uv`**, and nothing else. The mini-swe-agent fork is fetched over HTTPS from
+  a public repo, so no GitHub credentials or SSH key are needed.
+- **A `model-hosting` checkout beside this one** — only if you want to generate
+  against a self-hosted model. Skip it and pass `--api-base`, or use an
+  OpenRouter key.
+
+### Three steps
+
 ```bash
-uv sync                                  # installs deps + the mini-swe-agent fork
-cp .env.example ~/.config/mini-swe-agent/.env    # then edit: API key, ENROOT_* paths
-bash slurm/setup_enroot_sysconf.sh       # build ./enroot_sysconf
-uv run python -m swebp_slurm.setup_dockerhub_creds
+uv sync                  # deps + the mini-swe-agent fork
+bash bin/setup.sh        # builds enroot_sysconf/ and writes ~/.config/mini-swe-agent/.env
+$EDITOR ~/.config/mini-swe-agent/.env    # paste your OPENROUTER_API_KEY
 ```
+
+`bin/setup.sh` is idempotent and never overwrites an existing `.env` (it prints
+the values to merge instead). **Re-run it if you move the checkout** —
+`ENROOT_SYSCONF_PATH` is an absolute path baked at generation time.
 
 mini-swe-agent loads `~/.config/mini-swe-agent/.env` on import, which is how the
 `ENROOT_*` variables reach the environment before any `enroot` subprocess runs.
+`.env.example` documents every key, including the optional ones.
 
 **`ENROOT_DATA_PATH` must be node-local, exec-capable storage** (e.g. `/tmp`). The
 unpacked rootfs cannot be executed from GPFS/parallel scratch under unprivileged user
 namespaces — `/bin/sh` in the rootfs fails to exec. `ENROOT_CACHE_PATH` only holds
 imported `.sqsh` blobs, which are never exec'd, so it may live on shared scratch.
 
-**Image pulls must be authenticated.** Cluster nodes typically egress through one
-shared NAT IP whose anonymous DockerHub quota is permanently exhausted; authenticated
-pulls count against your account instead. `stage_image.sh` handles two enroot quirks:
-credentials are only sent when the registry is explicit in the URI
+### Optional: pulling images the shared store lacks
+
+The shared store covers the whole dataset, and a store hit is used in place — no
+copy, no pull — so **most runs need no DockerHub account**. You only need one to
+stage an image the store is missing (or if you set `SWEBP_IMAGE_STORE=`):
+
+```bash
+$EDITOR ~/.config/mini-swe-agent/.env    # add DOCKERHUB_USERNAME / DOCKERHUB_PAT
+uv run python -m swebp_slurm.setup_dockerhub_creds
+```
+
+Cluster nodes egress through one shared NAT IP whose anonymous DockerHub quota is
+permanently exhausted, so such pulls must be authenticated; authenticated pulls count
+against your account instead. `stage_image.sh` handles two enroot quirks: credentials
+are only sent when the registry is explicit in the URI
 (`docker://registry-1.docker.io#<image>`, not `docker://jefzda/...`), and a
 `.credentials` file holds a single account — so each account gets its own
-`ENROOT_CONFIG_PATH` and the helper fails over `dh1 -> dh2` at the rate limit.
+`ENROOT_CONFIG_PATH` and the helper fails over `dh1 -> dh2` at the rate limit. A
+second account (`2nd_DOCKERHUB_*`) doubles the 6h cap; one, or none, is fine.
 
 ## Running the benchmark
 
@@ -306,7 +342,7 @@ every value is environment-overridable:
 | `SWEBP_ACCOUNT` | `sci-maalej-swe-bench` | Slurm account |
 | `SWEBP_PARTITION` / `SWEBP_CONSTRAINT` | `cpu-batch` / `ARCH:X86` | where jobs land |
 | `SWEBP_PYTHON` | `$SWEBP_REPO/.venv/bin/python` | harness interpreter |
-| `SWEBP_ENDPOINT_DIR` | `~/projects/model-hosting/endpoint` | directory of self-hosted endpoint descriptors; the newest one reporting `ready` wins |
+| `SWEBP_ENDPOINT_DIR` | `$SWEBP_REPO/../model-hosting/endpoint` | directory of self-hosted endpoint descriptors; the newest one reporting `ready` wins |
 | `SWEBP_ENDPOINT_JSON` | *(empty)* | pin one exact descriptor file instead of scanning the directory |
 
 ```bash
@@ -350,6 +386,13 @@ its `base_url`, so the serving job's node is never hardcoded. The serving repo
 writes one file per model (`endpoint-<model_key>.json`) and deletes it on exit,
 which is why the directory, not a filename, is the stable thing to point at.
 
+Descriptors are **per-checkout, not shared**: you serve your own model and read
+your own `endpoint/` dir. The default assumes `model-hosting` sits beside this
+repo (`$SWEBP_REPO/../model-hosting/endpoint`); set `SWEBP_ENDPOINT_DIR` if it
+does not. If the directory is absent nothing breaks — resolution just finds
+nothing and the run falls back to whatever `API_BASE` it was given, so this is
+entirely skippable when generating against a hosted API.
+
 It then preflights `GET <base>/models` and exits with an `ENDPOINT_DOWN` verdict if that is not `200`.
 Without this a dead server costs every task its full litellm retry ladder
 (4s…60s ×7) and then looks like an ordinary empty patch. `API_BASE` overrides the
@@ -372,4 +415,5 @@ not in `/tmp`.
 
 This repo vendors `SWE-agent` and `mini-swe-agent` as submodules for upstream's own
 scaffold. **Neither is used by this path**, which depends on the packaged
-`cdfhalle/mini-swe-agent` fork instead. You can clone with `--no-recurse-submodules`.
+public [`cdfhalle/mini-swe-agent`](https://github.com/cdfhalle/mini-swe-agent) fork
+instead, resolved over HTTPS by `uv`. You can clone with `--no-recurse-submodules`.

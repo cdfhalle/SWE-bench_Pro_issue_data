@@ -36,11 +36,9 @@ from minisweagent.utils.log import logger  # importing mini also loads its .env
 # identical to the upstream harness's.
 from helper_code.create_problem_statement import create_problem_statement
 from helper_code.image_uri import get_dockerhub_image_uri
+from swebp_slurm import DEFAULT_DOCKERHUB_USERNAME
 
 DATASET = "ScaleAI/SWE-bench_Pro"
-# The public, anonymously-pullable image repo the staged .sqsh files come from;
-# get_dockerhub_image_uri returns "<user>/sweap-images:<tag>".
-DEFAULT_DOCKERHUB_USERNAME = "jefzda"
 
 app = typer.Typer(rich_markup_mode="rich", add_completion=False)
 

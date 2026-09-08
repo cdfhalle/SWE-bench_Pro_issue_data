@@ -37,7 +37,12 @@ SWEBP_PYTHON="${SWEBP_PYTHON:-$SWEBP_REPO/.venv/bin/python}"
 # That repo writes one file per model (endpoint-<model_key>.json), so the
 # DIRECTORY is the stable thing to point at: gen_array picks the newest
 # descriptor reporting ready. SWEBP_ENDPOINT_JSON pins one exact file instead.
-SWEBP_ENDPOINT_DIR="${SWEBP_ENDPOINT_DIR:-$HOME/projects/model-hosting/endpoint}"
+#
+# Descriptors are per-checkout: each user serves their own model and reads their
+# own endpoint/ dir. The default assumes model-hosting is checked out beside this
+# repo; set SWEBP_ENDPOINT_DIR when it is not, or leave the dir absent entirely
+# and pass --api-base (gen_array falls back to it).
+SWEBP_ENDPOINT_DIR="${SWEBP_ENDPOINT_DIR:-$SWEBP_REPO/../model-hosting/endpoint}"
 SWEBP_ENDPOINT_JSON="${SWEBP_ENDPOINT_JSON:-}"
 
 export SWEBP_REPO SWEBP_IMAGES_DIR SWEBP_IMAGE_STORE SWEBP_ACCOUNT SWEBP_PARTITION SWEBP_CONSTRAINT \
