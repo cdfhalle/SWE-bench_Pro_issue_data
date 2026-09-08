@@ -25,17 +25,35 @@
 #   all" hook, pytest fixture, etc.) fails. We bind a custom /etc/hosts where
 #   `localhost` is IPv4-only, fixing it for every image/runtime.
 #
-# Fix 3 -- keep the Go build cache off the quota'd home filesystem:
-#   The site config (/etc/enroot/enroot.conf.d/enroot-sci.conf) sets
-#   ENROOT_MOUNT_HOME=y, so hooks.d/10-home.sh bind-mounts $HOME rw into every
-#   container at its host path. Nothing sets GOCACHE, so the 362 Go run_scripts
-#   (navidrome, teleport, flipt, vuls) default it to $HOME/.cache/go-build and
-#   compile straight onto /sc/home -- 102G in a single full run, against a 200G
-#   quota. teleport alone runs `go test -race` over its whole module. We bind a
-#   scratch dir in as /gocache and point GOCACHE at it, so the cache lands on
-#   GPFS instead. Node-local disk would be faster still, but cpu-batch nodes
-#   have no /scratch and the container's /tmp is a tmpfs (RAM), so scratch is
-#   the only durable non-home target.
+# Fix 3 -- give the Go build cache a home that survives between instances:
+#   Nothing in the images sets GOCACHE, so the 362 Go run_scripts (navidrome,
+#   teleport, flipt, vuls) default it to $HOME/.cache/go-build. We bind a scratch
+#   dir in as /gocache and point GOCACHE at it. Note this fix has OUTLIVED its
+#   original motivation and now serves a different one -- do not delete it on the
+#   strength of the old rationale:
+#
+#     Originally (ENROOT_MOUNT_HOME=y, the site default): $HOME was bind-mounted
+#     rw at its host path, so Go compiled straight onto /sc/home -- 102G in one
+#     full run against a 200G quota. The redirect was quota PROTECTION.
+#
+#     Now (EnrootEnvironment.mount_home=False forces ENROOT_MOUNT_HOME=n): $HOME
+#     still reads as /sc/home/$USER inside the container, but that path resolves
+#     INSIDE the ephemeral rootfs, which `enroot remove -f` destroys after every
+#     instance. Without this bind the Go cache would be rebuilt from cold for
+#     every Go instance; teleport alone runs `go test -race` over its whole
+#     module. The redirect is now PERSISTENCE, and matters more than before.
+#
+#   Verified by probe: with mount_home off, a marker written to /gocache survives
+#   `enroot remove`, while one written under $HOME does not.
+#
+#   Sharing one cache across instances is safe because the Go build cache is
+#   content-addressed -- entries are keyed by hashes of inputs and flags, so a
+#   hit cannot change build output, only skip work. That is the distinction from
+#   the old home mount, which leaked arbitrary state across instances.
+#
+#   Scratch (GPFS) is the target because cpu-batch nodes have no node-local
+#   /scratch and the container's /tmp is a tmpfs (RAM); node-local disk would be
+#   faster but is not available where these jobs run.
 #
 # Idempotent. Usage: setup_enroot_sysconf.sh [TARGET_DIR]
 set -euo pipefail
