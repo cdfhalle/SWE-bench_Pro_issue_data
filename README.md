@@ -272,7 +272,17 @@ untouched.
 
 A `gh-gateway` job holds the token, calls `api.github.com` on demand and applies the
 filters on the host, where the agent cannot reach them. Inside the container the agent
-gets a `gh` command (`search` / `show` / `diff`) and no credential.
+gets a `gh` command and no credential:
+
+```
+gh search [issues|prs] <words...> [--limit N]   # relevance-ranked, 30 by default
+gh show <number>                                # thread + its pre-cutoff comments
+gh diff <number>                                # only when the gateway ran with DIFFS=1
+```
+
+The `issues`/`prs` prefix and `--limit` are absorbed rather than searched for:
+models reach for that shape unprompted, and passing it through as search terms
+cost real recall in the first smoke run.
 
 ```bash
 sbatch --export=ALL,RUN=ghctx-on slurm/gh_gateway.sbatch    # start it FIRST
