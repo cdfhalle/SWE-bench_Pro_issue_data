@@ -21,6 +21,7 @@ the log is the evidence the `audit` subcommand checks.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -229,6 +230,7 @@ class GitHub:
     cache_hits: int = 0
     core: Bucket = field(default_factory=lambda: Bucket(5000, 3600))
     search: Bucket = field(default_factory=lambda: Bucket(30, 60))
+    search_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def _cache_path(self, key: str) -> Path:
         digest = hashlib.sha256(key.encode()).hexdigest()
@@ -248,6 +250,13 @@ class GitHub:
         if self.replay:
             raise Refused(f"replay mode: {url} is not in the cache", 503)
 
+        # GitHub's secondary limits punish concurrency as well as rate: five
+        # agents searching at once drew 403s well under the 30/minute primary
+        # budget (run ghctx-smoke5b). Searches therefore go one at a time.
+        with self.search_lock if family == "search" else contextlib.nullcontext():
+            return self._fetch_uncached(url, accept, family, path)
+
+    def _fetch_uncached(self, url: str, accept: str, family: str, path: Path) -> str:
         (self.search if family == "search" else self.core).take()
         for attempt in range(4):
             request = urllib.request.Request(
@@ -285,7 +294,10 @@ class GitHub:
             return min(float(value), 300.0)
         if headers.get("X-RateLimit-Remaining") == "0" and (reset := headers.get("X-RateLimit-Reset")):
             return max(0.0, min(float(reset) - time.time() + 5, 900.0))
-        return float(2**attempt)
+        # A 403 with budget still on the clock is a secondary rate limit, and
+        # GitHub asks for a minute before retrying. The 1-2-4 seconds this used
+        # to wait just burned the retries and surfaced as a failed search.
+        return min(60.0 * (attempt + 1), 300.0)
 
     def json(self, path: str, *, family: str = "core"):
         return json.loads(self.fetch(f"{API}{path}", family=family))
