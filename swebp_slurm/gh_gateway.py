@@ -465,11 +465,12 @@ class Gateway:
 
     # -- views -------------------------------------------------------------- #
 
-    def search(self, instance: Instance, query: str) -> tuple[str, dict]:
+    def search(self, instance: Instance, query: str, limit: int = 30) -> tuple[str, dict]:
         self._spend(instance, "search")
         q = rewrite_query(query, instance.repo, instance.cutoff)
         payload = self.gh.json(
-            f"/search/issues?q={urllib.parse.quote(q)}&per_page=30&sort=created&order=desc",
+            f"/search/issues?q={urllib.parse.quote(q)}&per_page={max(1, min(limit, 50))}"
+            "&sort=created&order=desc",
             family="search",
         )
         dropped, lines, dates = 0, [], []
@@ -642,7 +643,7 @@ def make_handler(gateway: Gateway):
             try:
                 instance = gateway.instance(instance_id)
                 if url.path == "/search":
-                    text, stats = gateway.search(instance, query.get("q", ""))
+                    text, stats = gateway.search(instance, query.get("q", ""), int(query.get("limit", 30)))
                 elif url.path == "/thread":
                     text, stats = gateway.thread(instance, int(query["n"]))
                 elif url.path == "/diff":

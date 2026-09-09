@@ -27,7 +27,9 @@ GH_INSTANCE='__INSTANCE__'
 usage() {
     cat <<'EOF'
 usage:
-  gh search <words...>   search issues and pull requests (qualifiers like is:issue work)
+  gh search [issues|prs] <words...> [--limit N]
+                         search issues and pull requests (qualifiers like
+                         is:issue, is:pr and in:title also work)
   gh show <number>       one issue or pull request, with its comments
   gh diff <number>       the diff of a pull request, when the run enables it
 EOF
@@ -71,8 +73,30 @@ cmd=${1:-}
 shift
 case $cmd in
     search)
-        [ $# -gt 0 ] || { echo "gh search: nothing to search for" >&2; exit 2; }
-        fetch "/search?instance=$(urlencode "$GH_INSTANCE")&q=$(urlencode "$*")"
+        # Models reach for a CLI shape that does not exist here -- a leading
+        # `issues`/`prs` word and `--limit N` were both observed in the first
+        # smoke run, where they went through as literal search terms and quietly
+        # cost recall. Absorb them instead of searching for them.
+        terms=''
+        limit=''
+        case ${1:-} in
+            issues|issue) terms='is:issue'; shift ;;
+            prs|pr|pulls) terms='is:pr'; shift ;;
+        esac
+        while [ $# -gt 0 ]; do
+            case $1 in
+                --limit|-n) shift; limit=${1:-} ;;
+                --limit=*) limit=${1#--limit=} ;;
+                -*) : ;;
+                *) terms="$terms $1" ;;
+            esac
+            shift
+        done
+        terms=${terms# }
+        [ -n "$terms" ] || { echo "gh search: nothing to search for" >&2; exit 2; }
+        url="/search?instance=$(urlencode "$GH_INSTANCE")&q=$(urlencode "$terms")"
+        case $limit in [0-9]*) url="$url&limit=$limit" ;; esac
+        fetch "$url"
         ;;
     show)
         [ $# -eq 1 ] || { echo "gh show: expected one number" >&2; exit 2; }
@@ -99,7 +123,9 @@ It serves **only** this repository, and **only** issues, pull requests and
 comments created before {{ gh_cutoff }} -- the commit currently checked out in
 /app. Nothing written after that point exists as far as this task is concerned.
 
-  gh search <words...>   search issues and pull requests (is:issue, is:pr, in:title work)
+  gh search [issues|prs] <words...> [--limit N]
+                         search issues and pull requests (is:issue, is:pr and
+                         in:title also work; default 30 results)
   gh show <number>       one thread with its comments
   gh diff <number>       a pull request's diff, when this run enables it
 

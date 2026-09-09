@@ -209,6 +209,18 @@ def test_search_scopes_and_filters(gateway):
     assert (stats["results"], stats["dropped"]) == (1, 3)
 
 
+@pytest.mark.parametrize(("limit", "per_page"), [(5, 5), (0, 1), (999, 50), (30, 30)])
+def test_search_limit_is_clamped(gateway, limit, per_page):
+    """The client forwards whatever number the agent typed after --limit."""
+    query = rewrite_query("x", REPO, parse_ts(CUTOFF))
+    seed(
+        gateway,
+        f"/search/issues?q={urllib.parse.quote(query)}&per_page={per_page}&sort=created&order=desc",
+        {"items": []},
+    )
+    assert gateway.search(gateway.instances["inst"], "x", limit)[1]["results"] == 0
+
+
 @pytest.mark.parametrize(
     ("query", "must_not_contain"),
     [
