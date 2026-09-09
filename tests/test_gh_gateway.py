@@ -67,7 +67,7 @@ def seed(gw: Gateway, path: str, payload, accept: str = "application/vnd.github+
     target.write_text(json.dumps({"url": API + path, "accept": accept, "text": json.dumps(payload)}))
 
 
-def seed_edits(gw: Gateway, number: int, edited_at: list[str]) -> None:
+def seed_edits(gw: Gateway, number: int, edits: list[tuple[str, str | None]]) -> None:
     body = json.dumps(
         {"query": EDITS_QUERY, "variables": {"owner": "acme", "name": "widget", "number": number}}
     ).encode()
@@ -80,7 +80,7 @@ def seed_edits(gw: Gateway, number: int, edited_at: list[str]) -> None:
                     "data": {
                         "repository": {
                             "issueOrPullRequest": {
-                                "userContentEdits": {"nodes": [{"editedAt": e} for e in edited_at]}
+                                "userContentEdits": {"nodes": [{"editedAt": at, "diff": d} for at, d in edits]}
                             }
                         }
                     }
@@ -90,7 +90,9 @@ def seed_edits(gw: Gateway, number: int, edited_at: list[str]) -> None:
     )
 
 
-def seed_thread(gw: Gateway, number: int, issue: dict, comments: list[dict], edits: list[str] | None = None) -> None:
+def seed_thread(
+    gw: Gateway, number: int, issue: dict, comments: list[dict], edits: list[tuple[str, str | None]] | None = None
+) -> None:
     seed(gw, f"/repos/{REPO}/issues/{number}", issue)
     seed(gw, f"/repos/{REPO}/issues/{number}/comments?per_page=100&page=1", comments)
     seed_edits(gw, number, edits or [])
@@ -161,17 +163,30 @@ def test_comment_naming_the_fix_sha_is_dropped(gateway):
     assert gateway.thread(gateway.instances["inst"], 5)[1]["comments"] == 0
 
 
-def test_body_omitted_when_edited_after_the_cutoff(gateway):
+def test_body_is_restored_to_its_text_at_the_cutoff(gateway):
     """`updated_at` is useless for bodies -- it bumps on any activity -- so the
-    real edit history decides. An unreconstructable body is dropped, not guessed."""
-    seed_thread(gateway, 5, ISSUE, [], edits=[AFTER])
+    real edit history decides. Each edit node carries the body *after* that
+    edit, so the newest pre-cutoff edit is the text that stood at the cutoff."""
+    seed_thread(gateway, 5, ISSUE, [], edits=[(BEFORE, "the text as of the cutoff"), (AFTER, ISSUE["body"])])
     text, stats = gateway.thread(gateway.instances["inst"], 5)
-    assert ISSUE["body"] not in text
-    assert stats["body"] == "omitted:edited-after-cutoff"
+    assert "the text as of the cutoff" in text and ISSUE["body"] not in text
+    assert stats["body"] == "reconstructed"
 
-    seed_thread(gateway, 6, {**ISSUE, "number": 6}, [], edits=[BEFORE])
+
+def test_body_omitted_when_every_revision_postdates_the_cutoff(gateway):
+    """Its original text is not in the history, so it is dropped, not guessed."""
+    seed_thread(gateway, 5, ISSUE, [], edits=[(AFTER, ISSUE["body"])])
+    text, stats = gateway.thread(gateway.instances["inst"], 5)
+    assert ISSUE["body"] not in text and stats["body"] == "omitted:edited-after-cutoff"
+
+
+def test_unedited_body_is_served_as_is(gateway):
+    seed_thread(gateway, 6, {**ISSUE, "number": 6}, [], edits=[])
     text, stats = gateway.thread(gateway.instances["inst"], 6)
     assert ISSUE["body"] in text and stats["body"] == "served"
+
+    seed_thread(gateway, 7, {**ISSUE, "number": 7}, [], edits=[(BEFORE, ISSUE["body"])])
+    assert gateway.thread(gateway.instances["inst"], 7)[1]["body"] == "served"
 
 
 def test_search_scopes_and_filters(gateway):

@@ -43,12 +43,17 @@ API = "https://api.github.com"
 # Issue and PR *bodies* are checked for post-cutoff edits through GraphQL; REST
 # exposes no edit history at all, only `updated_at`, which on an issue bumps on
 # any activity and so says nothing about the body.
+#
+# `diff` is misleadingly named: it returns the full body text *as of that edit*,
+# not a unified diff (verified against NodeBB#7330, whose newest edit's `diff`
+# is byte-identical to the current body). That is what makes reconstruction
+# rather than omission possible -- see body_at_cutoff.
 EDITS_QUERY = """
 query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){
     issueOrPullRequest(number:$number){
-      ... on Issue       { userContentEdits(last:100){nodes{editedAt}} }
-      ... on PullRequest { userContentEdits(last:100){nodes{editedAt}} }
+      ... on Issue       { userContentEdits(last:100){nodes{editedAt diff}} }
+      ... on PullRequest { userContentEdits(last:100){nodes{editedAt diff}} }
     }
   }
 }
@@ -139,8 +144,22 @@ def state_at(issue: dict, cutoff: datetime) -> str:
     return "closed" if closed and parse_ts(closed) <= cutoff else "open"
 
 
-def body_edited_after(edit_nodes: list[dict], cutoff: datetime) -> bool:
-    return any(parse_ts(n["editedAt"]) > cutoff for n in edit_nodes if n.get("editedAt"))
+def body_at_cutoff(edit_nodes: list[dict], cutoff: datetime, current: str) -> tuple[str | None, str]:
+    """The body as it stood at the cutoff, or None if it cannot be recovered.
+
+    Each edit node carries the body *after* that edit, so the newest edit at or
+    before the cutoff is by definition the text that stood there until the next
+    (post-cutoff) edit. Only a body whose every edit is post-cutoff is
+    unrecoverable -- its original text is not in the history -- and that one is
+    dropped rather than guessed.
+    """
+    dated = sorted((n for n in edit_nodes if n.get("editedAt")), key=lambda n: n["editedAt"])
+    if not any(parse_ts(n["editedAt"]) > cutoff for n in dated):
+        return current, "served"
+    before = [n for n in dated if parse_ts(n["editedAt"]) <= cutoff and n.get("diff") is not None]
+    if before:
+        return before[-1]["diff"], "reconstructed"
+    return None, "omitted:edited-after-cutoff"
 
 
 SCOPE_QUALIFIER = re.compile(r"\b(?:repo|org|user|created|updated|closed|merged):\S+", re.I)
@@ -515,9 +534,9 @@ class Gateway:
         """The body as of the cutoff, or nothing.
 
         `updated_at` is useless here -- on an issue it bumps on any activity --
-        so the real edit history is read from GraphQL. If the body was edited
-        after the cutoff we cannot reconstruct what it said and omit it; if the
-        history cannot be read at all we do the same rather than guess.
+        so the real edit history is read from GraphQL and the body is restored
+        to its text at the cutoff. Only a body whose every edit postdates the
+        cutoff is unrecoverable, and that one is dropped rather than guessed.
         """
         owner, name = instance.repo.split("/", 1)
         try:
@@ -527,13 +546,14 @@ class Gateway:
         except Refused:
             stats["body"] = "omitted:edit-history-unavailable"
             return "(body omitted: its edit history could not be verified against the cutoff)"
-        if body_edited_after(nodes, instance.cutoff):
-            stats["body"] = "omitted:edited-after-cutoff"
-            return "(body omitted: it was edited after the cutoff, so its text at the cutoff is unknown)"
-        if token := find_forbidden(issue.get("body") or "", instance.tokens):
+        body, reason = body_at_cutoff(nodes, instance.cutoff, issue.get("body") or "")
+        stats["body"] = reason
+        if body is None:
+            return "(body omitted: every revision of it postdates the cutoff)"
+        if token := find_forbidden(body, instance.tokens):
             stats["body"] = f"omitted:names-the-fix:{token}"
             return "(body omitted)"
-        return issue.get("body") or "(empty)"
+        return body or "(empty)"
 
     def _merged_hint(self, instance: Instance, number: int, stats: dict) -> list[str]:
         pull = self.gh.json(f"/repos/{instance.repo}/pulls/{number}")
