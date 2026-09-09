@@ -193,7 +193,7 @@ def test_search_scopes_and_filters(gateway):
     query = rewrite_query("validation is:issue", REPO, parse_ts(CUTOFF))
     seed(
         gateway,
-        f"/search/issues?q={urllib.parse.quote(query)}&per_page=30&sort=created&order=desc",
+        f"/search/issues?q={urllib.parse.quote(query)}&per_page=30",
         {
             "items": [
                 {"number": 5, "title": "validation is wrong", "created_at": BEFORE, "closed_at": None, "comments": 2},
@@ -215,7 +215,7 @@ def test_search_limit_is_clamped(gateway, limit, per_page):
     query = rewrite_query("x", REPO, parse_ts(CUTOFF))
     seed(
         gateway,
-        f"/search/issues?q={urllib.parse.quote(query)}&per_page={per_page}&sort=created&order=desc",
+        f"/search/issues?q={urllib.parse.quote(query)}&per_page={per_page}",
         {"items": []},
     )
     assert gateway.search(gateway.instances["inst"], "x", limit)[1]["results"] == 0
@@ -261,7 +261,7 @@ def test_budget_is_enforced_and_explicit(gateway):
     gateway.budget_search = 2
     instance = gateway.instances["inst"]
     seed(gateway, f"/search/issues?q={urllib.parse.quote(rewrite_query('x', REPO, parse_ts(CUTOFF)))}"
-         "&per_page=30&sort=created&order=desc", {"items": []})
+         "&per_page=30", {"items": []})
     gateway.search(instance, "x")
     gateway.search(instance, "x")
     with pytest.raises(Refused) as excinfo:

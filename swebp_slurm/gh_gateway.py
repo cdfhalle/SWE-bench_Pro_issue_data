@@ -468,9 +468,13 @@ class Gateway:
     def search(self, instance: Instance, query: str, limit: int = 30) -> tuple[str, dict]:
         self._spend(instance, "search")
         q = rewrite_query(query, instance.repo, instance.cutoff)
+        # No `sort`: GitHub's default is best-match relevance, and that is the
+        # whole value of the search endpoint. Sorting by creation date instead
+        # returns the newest *loosely* matching threads -- on a repo the size of
+        # ansible the first smoke run got 30 recency-ordered items with nothing
+        # to do with the query, which is what made the tracker look empty.
         payload = self.gh.json(
-            f"/search/issues?q={urllib.parse.quote(q)}&per_page={max(1, min(limit, 50))}"
-            "&sort=created&order=desc",
+            f"/search/issues?q={urllib.parse.quote(q)}&per_page={max(1, min(limit, 50))}",
             family="search",
         )
         dropped, lines, dates = 0, [], []
