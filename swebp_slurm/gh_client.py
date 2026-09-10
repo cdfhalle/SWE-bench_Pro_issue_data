@@ -124,14 +124,29 @@ comments created before {{ gh_cutoff }} -- the commit currently checked out in
 /app. Nothing written after that point exists as far as this task is concerned.
 
   gh search [issues|prs] <words...> [--limit N]
-                         search issues and pull requests (is:issue, is:pr and
+                         find threads, ranked by relevance (is:issue, is:pr and
                          in:title also work; default 30 results)
-  gh show <number>       one thread with its comments
+  gh show <number>       read one thread and its comments
   gh diff <number>       a pull request's diff, when this run enables it
 
-Up to {{ gh_budget }} searches are available for this task; use them when the
-codebase alone leaves the intended behaviour ambiguous. This is background
-material, not a specification -- the PR description above remains the task.
+The pull request that implements this task is NOT in the tracker, and neither is
+any discussion of it -- all of that postdates the cutoff. Searching for the fix,
+the solution or "the upstream PR" will find nothing, and that is by
+construction, not a sign that the tracker is empty.
+
+What is here is the history leading up to this point: bug reports describing the
+behaviour users actually hit, earlier attempts and why they were rejected,
+maintainers stating what the intended semantics are, and the edge cases people
+ran into. That context is often more precise than the description above about
+how the change should behave at the margins.
+
+Search returns titles only. A title tells you a thread exists; `gh show <number>`
+is what gets you the reasoning, and the reasoning is the part worth having -- so
+open the two or three most relevant threads rather than searching again. Up to
+{{ gh_budget }} searches are available.
+
+This is background material, not a specification: the PR description above
+remains the task.
 </issue_tracker>
 """
 
