@@ -39,9 +39,18 @@ SWEBP_PYTHON="${SWEBP_PYTHON:-$SWEBP_REPO/.venv/bin/python}"
 # descriptor reporting ready. SWEBP_ENDPOINT_JSON pins one exact file instead.
 #
 # Descriptors are per-checkout: each user serves their own model and reads their
-# own endpoint/ dir. The default assumes model-hosting is checked out beside this
-# repo; set SWEBP_ENDPOINT_DIR when it is not, or leave the dir absent entirely
-# and pass --api-base (gen_array falls back to it).
+# own endpoint/ dir. Look for model-hosting beside this checkout first, then in
+# the ~/projects/ layout -- that second candidate is what keeps discovery working
+# from a worktree, where "beside this checkout" lands inside .claude/worktrees/
+# and does not exist. Set SWEBP_ENDPOINT_DIR to override; if no candidate exists
+# discovery finds nothing and the run falls back to --api-base, the same graceful
+# degradation as before.
+if [ -z "${SWEBP_ENDPOINT_DIR:-}" ]; then
+    for _d in "$SWEBP_REPO/../model-hosting/endpoint" "$HOME/projects/model-hosting/endpoint"; do
+        [ -d "$_d" ] && { SWEBP_ENDPOINT_DIR="$_d"; break; }
+    done
+    unset _d
+fi
 SWEBP_ENDPOINT_DIR="${SWEBP_ENDPOINT_DIR:-$SWEBP_REPO/../model-hosting/endpoint}"
 SWEBP_ENDPOINT_JSON="${SWEBP_ENDPOINT_JSON:-}"
 
