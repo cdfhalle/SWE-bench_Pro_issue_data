@@ -925,7 +925,7 @@ wheels = [
 [[package]]
 name = "mini-swe-agent"
 version = "2.4.6"
-source = { git = "ssh://git@github.com/cdfhalle/mini-swe-agent.git?branch=main#0a962393fc16ced3bd0aea23a445d840c1581888" }
+source = { git = "https://github.com/cdfhalle/mini-swe-agent.git?branch=main#0a962393fc16ced3bd0aea23a445d840c1581888" }
 dependencies = [
     { name = "datasets" },
     { name = "jinja2" },
@@ -1868,7 +1868,7 @@ requires-dist = [
     { name = "datasets", specifier = ">=2.14.0" },
     { name = "huggingface-hub", specifier = ">=0.16.0" },
     { name = "jinja2" },
-    { name = "mini-swe-agent", git = "ssh://git@github.com/cdfhalle/mini-swe-agent.git?branch=main" },
+    { name = "mini-swe-agent", git = "https://github.com/cdfhalle/mini-swe-agent.git?branch=main" },
     { name = "pandas", specifier = ">=1.5.0" },
     { name = "pyyaml" },
     { name = "tqdm", specifier = ">=4.64.0" },
