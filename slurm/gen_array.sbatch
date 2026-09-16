@@ -126,10 +126,19 @@ else
   SQSH="$IMAGES_DIR/$SQSH_BASE.sqsh"; FROM_STORE=
 fi
 
+# Contamination controls (config.sh documents both, and why they default on).
+# Passed explicitly rather than left to run_instance's defaults so the verdict log
+# records which setting produced this run.
+STRIP_FLAG=--strip-history
+[ "${SWEBP_STRIP_HISTORY:-1}" = 1 ] || STRIP_FLAG=--no-strip-history
+BLOCK_FLAG=--block-github
+[ "${SWEBP_BLOCK_GITHUB:-1}" = 1 ] || BLOCK_FLAG=--no-block-github
+
 echo "===== gen task $SLURM_ARRAY_TASK_ID  node=$(hostname) ====="
 echo "iid=$IID"
 echo "model=$MODEL"
 echo "sqsh=$SQSH"
+echo "contamination controls: $STRIP_FLAG $BLOCK_FLAG"
 
 if [ -z "$IID" ]; then echo "could not read instance line"; record READ_FAIL; exit 0; fi
 
@@ -147,6 +156,7 @@ fi
 "$SWEBP_PYTHON" -m swebp_slurm.run_instance \
   --instances-file "$INSTANCES" --index "$SLURM_ARRAY_TASK_ID" \
   --image "$SQSH" --model "$MODEL" --output "$OUT" \
+  "$STRIP_FLAG" "$BLOCK_FLAG" \
   ${STEP_LIMIT:+--step-limit "$STEP_LIMIT"}
 rc=$?
 

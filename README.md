@@ -344,10 +344,69 @@ every value is environment-overridable:
 | `SWEBP_PYTHON` | `$SWEBP_REPO/.venv/bin/python` | harness interpreter |
 | `SWEBP_ENDPOINT_DIR` | `$SWEBP_REPO/../model-hosting/endpoint` | directory of self-hosted endpoint descriptors; the newest one reporting `ready` wins |
 | `SWEBP_ENDPOINT_JSON` | *(empty)* | pin one exact descriptor file instead of scanning the directory |
+| `SWEBP_STRIP_HISTORY` | `1` | strip future git history in the agent's container (`0` = contaminated baseline) |
+| `SWEBP_BLOCK_GITHUB` | `1` | resolve GitHub to loopback in the agent's container (`0` = contaminated baseline) |
 
 ```bash
 SWEBP_IMAGES_DIR=/somewhere/else sbatch slurm/gen_array.sbatch
 ```
+
+### Contamination controls
+
+The prebuilt images ship the repository's **full** git history, including the commit
+that fixes the issue, and the containers have egress to GitHub. Agents use both: they
+find the fix commit with `git for-each-ref` / `git log --all`, or fetch it with
+`curl .../commit/<sha>.patch`. This is upstream's defect — [issue #93][pro93] is open
+and its [PR #94][pro94] rebuilds all 731 Dockerfiles, which we cannot do (we import
+prebuilt `jefzda/sweap-images`, and this cluster has no Docker).
+
+Measured on `runs/qwen3827b-full-*` (Qwen3.8-27B, 731 instances, reported 80.3%
+against a published 61.7%):
+
+| population | n | solve rate |
+|---|---|---|
+| referenced the fix commit SHA | 278 | 93.9% |
+| fetched the fix over the network | 209 | 87.6% |
+| any contamination signal | 468 | 87.0% |
+| **no contamination signal** | **263** | **68.4%** |
+
+Two controls close this, both on by default and both scoped to **generation** —
+evaluation unpacks the same `.sqsh` into its own container and still needs the full
+history for its gold-test checkout, which is why we strip at container start rather
+than in the image, and why we need none of PR #94's `gold_test_fetcher.py`:
+
+- **`SWEBP_STRIP_HISTORY`** deletes every ref, reflog and now-unreachable object, so
+  only what `base_commit` reaches survives. Costs 2.9–6.5 s per instance and shrinks
+  `.git` (teleport 1.1 G → 96.6 M).
+- **`SWEBP_BLOCK_GITHUB`** binds a read-only `/etc/hosts` pointing `github.com` and
+  friends at `127.0.0.1`. `registry.npmjs.org` and `proxy.golang.org` are untouched,
+  so package installs still work.
+
+Set either to `0` to reproduce the contaminated behaviour for an A/B:
+
+```bash
+SWEBP_STRIP_HISTORY=0 SWEBP_BLOCK_GITHUB=0 \
+  uv run python -m swebp_slurm.submit_batch --run baseline-contaminated --slice 0:731
+```
+
+Both controls **assert** their effect after container setup and fail the instance
+loudly if it did not take. That is deliberate: both mechanisms fail silently
+otherwise, and a contaminated run that looks clean is the worst outcome. Check them
+against a real image with:
+
+```bash
+sbatch slurm/verify_contamination_controls.sbatch
+```
+
+The hosts bind is resolver-level, **not** isolation — an agent that hardcodes an IP
+or uses DNS-over-HTTPS still gets out. The right tool is enroot's `--net`, which
+arrived in **v4.2.0**; this cluster is pinned at **3.5.0**, where the flag does not
+exist and `ENROOT_UNSHARE_NET` is accepted and *silently ignored*. Ask the admins for
+enroot ≥ 4.2.0, keeping `/usr/bin/enroot-nsenter` at its current path so the existing
+AppArmor `allow userns create` exemption still applies.
+
+[pro93]: https://github.com/scaleapi/SWE-bench_Pro-os/issues/93
+[pro94]: https://github.com/scaleapi/SWE-bench_Pro-os/pull/94
 
 ### Shared prebuilt image store
 

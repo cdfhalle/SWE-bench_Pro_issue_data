@@ -32,6 +32,34 @@ SWEBP_CONSTRAINT="${SWEBP_CONSTRAINT:-ARCH:X86}"
 # Python for the harness itself (not the container's interpreter).
 SWEBP_PYTHON="${SWEBP_PYTHON:-$SWEBP_REPO/.venv/bin/python}"
 
+# Contamination controls for GENERATION. Both default on; set either to 0 to
+# reproduce the old, contaminated behaviour for an A/B. Eval is never affected --
+# it unpacks the same .sqsh into its own container and still needs the full git
+# history for its gold-test checkout.
+#
+# Why they exist: runs/qwen3827b-full-* scored 587/731 (80.3%) against a published
+# 61.7% for the same model. 468 of 731 instances show a contamination signal and
+# solve at 87.0%; the 263 with none solve at 68.4%. Both leaks are upstream's
+# (scaleapi/SWE-bench_Pro-os#93, open; its PR #94 rebuilds all 731 images, which we
+# cannot do -- we import prebuilt jefzda/sweap-images and this cluster has no
+# Docker), so we close them at container start instead.
+#
+# SWEBP_STRIP_HISTORY -- delete refs/reflogs/unreachable objects so the fix commit
+#   cannot be read out of the container. 278 instances referenced the fix SHA and
+#   solved at 93.9%. Costs 2.9-6.5s per instance and shrinks .git (teleport
+#   1.1G -> 96.6M), measured on job 2529619 over four images.
+#
+# SWEBP_BLOCK_GITHUB -- bind a read-only /etc/hosts pointing github.com and friends
+#   at 127.0.0.1, so the fix cannot simply be fetched over HTTP instead. 209
+#   instances did exactly that and solved at 87.6%. Verified on job 2530339: clone
+#   and API blocked, registry.npmjs.org and proxy.golang.org unaffected.
+#   This is resolver-level, NOT isolation. enroot's `--net` would be the right
+#   tool but arrived in v4.2.0 and this cluster is pinned at 3.5.0, where
+#   ENROOT_UNSHARE_NET is accepted and silently ignored (job 2530998 still reached
+#   GitHub with it set). Ask the admins for enroot >= 4.2.0 for the real fix.
+SWEBP_STRIP_HISTORY="${SWEBP_STRIP_HISTORY:-1}"
+SWEBP_BLOCK_GITHUB="${SWEBP_BLOCK_GITHUB:-1}"
+
 # Endpoint descriptors written by the model-serving repo; read by gen_array to
 # discover a self-hosted OpenAI-compatible server without hardcoding a hostname.
 # That repo writes one file per model (endpoint-<model_key>.json), so the
@@ -55,4 +83,5 @@ SWEBP_ENDPOINT_DIR="${SWEBP_ENDPOINT_DIR:-$SWEBP_REPO/../model-hosting/endpoint}
 SWEBP_ENDPOINT_JSON="${SWEBP_ENDPOINT_JSON:-}"
 
 export SWEBP_REPO SWEBP_IMAGES_DIR SWEBP_IMAGE_STORE SWEBP_ACCOUNT SWEBP_PARTITION SWEBP_CONSTRAINT \
-       SWEBP_PYTHON SWEBP_ENDPOINT_DIR SWEBP_ENDPOINT_JSON
+       SWEBP_PYTHON SWEBP_ENDPOINT_DIR SWEBP_ENDPOINT_JSON \
+       SWEBP_STRIP_HISTORY SWEBP_BLOCK_GITHUB
