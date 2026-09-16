@@ -50,6 +50,10 @@ echo "image present : $([ -f "$IMG" ] && echo yes || echo NO)"
 # enroot's DATA dir is node-local /tmp (per .env); create it on this node.
 DATA_DIR=$("$SWEBP_PYTHON" -c 'import minisweagent,os;print(os.environ.get("ENROOT_DATA_PATH"))' 2>/dev/null | tail -1)
 mkdir -p "$DATA_DIR" && echo "ENROOT_DATA dir ready: $DATA_DIR ($(findmnt -no FSTYPE --target "$DATA_DIR"))"
+# run_instance takes these from the environment (config.sh exports them), so this
+# path honours the toggles without repeating gen_array's flag derivation. Echoed
+# because a run's settings should be recoverable from its log, not inferred.
+echo "contamination controls: strip_history=${SWEBP_STRIP_HISTORY:-1} block_github=${SWEBP_BLOCK_GITHUB:-1}"
 echo "====================="
 
 "$SWEBP_PYTHON" -m swebp_slurm.run_instance "$IID" \

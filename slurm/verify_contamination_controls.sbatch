@@ -26,7 +26,13 @@
 set -uo pipefail
 cd "${SWEBP_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
 source ./config.sh
-bash slurm/setup_enroot_sysconf.sh >/dev/null
+# Must be fatal: this script runs without `set -e`, so a failed mirror build would
+# otherwise leave the checks below testing a stale or default enroot sysconf and
+# still reporting the controls as valid -- a green run that proved nothing.
+if ! bash slurm/setup_enroot_sysconf.sh >/dev/null; then
+    echo "setup_enroot_sysconf.sh failed -- refusing to verify against an unknown mount config"
+    exit 1
+fi
 
 # NodeBB by default: it has a real redis-on-localhost dependency, so it is the
 # case where shadowing /etc/hosts could plausibly break the container.

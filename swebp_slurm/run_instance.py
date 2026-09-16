@@ -24,6 +24,7 @@ Prerequisites (see the project handover for the why):
 from __future__ import annotations
 
 import json
+import os
 import traceback
 from pathlib import Path
 
@@ -182,9 +183,16 @@ def assert_repo_at_base(env, instance: dict) -> None:
 # rather than merely unreferenced, and git status/diff/checkout/reset all still
 # work. It also shrinks .git a lot (teleport 1.1G -> 96.6M), freeing node-local
 # scratch. Mirrors SWE-bench Verified's hardening and PR #94's cleanup block.
+#
+# `checkout --detach` first, then delete EVERY ref: enumerating only
+# heads/remotes/tags leaves refs/notes, refs/replace and refs/pull able to hold
+# the fix, and deleting the checked-out branch without detaching would leave HEAD
+# dangling. Detaching is a no-op in these images -- they ship a detached HEAD at
+# base_commit -- but it costs nothing and makes the deletion safe regardless.
 STRIP_FUTURE_HISTORY = """
 git remote remove origin 2>/dev/null || true
-git for-each-ref --format='delete %(refname)' refs/heads refs/remotes refs/tags | git update-ref --stdin
+git checkout --detach --quiet HEAD
+git for-each-ref --format='delete %(refname)' refs | git update-ref --stdin
 rm -f .git/FETCH_HEAD .git/ORIG_HEAD
 git reflog expire --expire=now --all
 git gc --prune=now
@@ -273,6 +281,11 @@ def strip_future_history(env) -> None:
     strip silently leaves the reference fix readable, which is the exact failure
     this control exists to prevent.
     """
+    # Sample one commit the base cannot reach BEFORE stripping. Afterwards it is
+    # the direct evidence that the objects are gone rather than merely unreferenced
+    # -- see the assertions below for why that distinction matters.
+    probe = env.execute({"command": "git rev-list --all --not HEAD | head -1"})["output"].strip()
+
     out = env.execute({"command": STRIP_FUTURE_HISTORY}, timeout=900)
     if out["returncode"] != 0:
         raise RuntimeError(f"stripping future git history failed: {out['output']}")
@@ -282,7 +295,51 @@ def strip_future_history(env) -> None:
             f"{remaining['output'].strip()} commits remain reachable that base_commit cannot "
             "reach -- the reference fix may still be readable; refusing to generate"
         )
-    logger.info("Stripped future git history (nothing reachable beyond base_commit)")
+
+    # The check above proves the REFS are gone, not that the commits were pruned:
+    # once the refs are deleted `--all` can only see HEAD, so it reads zero even if
+    # gc left the fix in the object store. An agent that runs
+    # `git fsck --unreachable` would still find it. These two assert the property
+    # the control actually depends on -- that the objects are unreadable.
+    #
+    # Empirically they hold: across the 731 trajectories of runs/cc-corrected, 23
+    # instances ran `git fsck` and 24 probed for unreachable/dangling objects, and
+    # not one probe returned anything. Fatal rather than a warning, for the same
+    # reason as every other assertion here.
+    if probe:
+        cat = env.execute(
+            {"command": f"git cat-file -e {probe}^{{commit}} 2>/dev/null && echo READABLE || echo GONE"}
+        )
+        if cat["output"].strip() != "GONE":
+            raise RuntimeError(
+                f"commit {probe[:12]} is still readable from the object store after the strip "
+                "-- gc did not prune it; refusing to generate"
+            )
+    dangling = env.execute(
+        {"command": "git fsck --no-reflogs --unreachable --no-progress 2>/dev/null | grep -c '^unreachable commit' || true"},
+        timeout=900,
+    )
+    if dangling["output"].strip() not in ("0", ""):
+        raise RuntimeError(
+            f"{dangling['output'].strip()} unreachable commits survive in the object store "
+            "-- the reference fix may still be recoverable; refusing to generate"
+        )
+    logger.info("Stripped future git history (objects pruned, not merely unreferenced)")
+
+
+def control_default(var: str) -> bool:
+    """Default for a contamination toggle, taken from config.sh's exported value.
+
+    The flags live here rather than only in slurm/gen_array.sbatch so that EVERY
+    entry point honours SWEBP_STRIP_HISTORY / SWEBP_BLOCK_GITHUB. Deriving them in
+    one wrapper meant the documented smoke-test path (slurm/test_run_instance.sbatch)
+    sourced config.sh but invoked this module without the flags, so setting a
+    toggle to 0 there silently did nothing and could not reproduce the
+    contaminated baseline the README promises.
+
+    Unset and empty both mean "on", matching the `${VAR:-1}` config.sh uses.
+    """
+    return (os.environ.get(var) or "1").strip().lower() not in ("0", "false", "no")
 
 
 def write_outputs(
@@ -343,8 +400,8 @@ def main(
     cost_limit: float | None = typer.Option(None, "-l", "--cost-limit", help="Override agent cost limit (USD)", rich_help_panel="Advanced"),
     config_path: Path = typer.Option(DEFAULT_CONFIG, "-c", "--config", help="mini config file to base the run on", rich_help_panel="Advanced"),
     setup: bool = typer.Option(True, "--setup/--no-setup", help="Verify the image is checked out at the instance's base_commit before the agent runs", rich_help_panel="Advanced"),
-    strip_history: bool = typer.Option(True, "--strip-history/--no-strip-history", help="Delete refs/reflogs/unreachable objects so the agent cannot read the reference fix out of git history. --no-strip-history reproduces the contaminated baseline.", rich_help_panel="Contamination controls"),
-    block_github: bool = typer.Option(True, "--block-github/--no-block-github", help="Bind a read-only /etc/hosts pointing github.com and friends at 127.0.0.1, so the fix cannot be fetched over HTTP instead. --no-block-github reproduces the contaminated baseline.", rich_help_panel="Contamination controls"),
+    strip_history: bool = typer.Option(control_default("SWEBP_STRIP_HISTORY"), "--strip-history/--no-strip-history", help="Delete refs/reflogs/unreachable objects so the agent cannot read the reference fix out of git history. --no-strip-history reproduces the contaminated baseline. Defaults to $SWEBP_STRIP_HISTORY.", rich_help_panel="Contamination controls"),
+    block_github: bool = typer.Option(control_default("SWEBP_BLOCK_GITHUB"), "--block-github/--no-block-github", help="Bind a read-only /etc/hosts pointing github.com and friends at 127.0.0.1, so the fix cannot be fetched over HTTP instead. --no-block-github reproduces the contaminated baseline. Defaults to $SWEBP_BLOCK_GITHUB.", rich_help_panel="Contamination controls"),
 ) -> None:
     # fmt: on
     """Generate a patch for one SWE-Bench Pro instance with mini + enroot."""
@@ -390,12 +447,23 @@ def main(
         )
 
     env = get_environment(config["environment"])
-    if setup:
-        assert_repo_at_base(env, instance)
-    if block_github:
-        assert_github_blocked(env)
-    if strip_history:
-        strip_future_history(env)
+
+    # Deliberately NOT inside the agent's try/except below. A control assertion
+    # must fail the instance -- folded into that handler it would be recorded as
+    # an empty patch, i.e. a model result, which is the silent contamination this
+    # whole control exists to prevent. Release the container on the way out
+    # though: without this an assertion failure leaks the enroot rootfs on the
+    # node for every failed task.
+    try:
+        if setup:
+            assert_repo_at_base(env, instance)
+        if block_github:
+            assert_github_blocked(env)
+        if strip_history:
+            strip_future_history(env)
+    except BaseException:
+        env.cleanup()
+        raise
 
     agent = DefaultAgent(get_model(config=config.get("model", {})), env, **config.get("agent", {}))
 
@@ -414,6 +482,7 @@ def main(
         pred_path = write_outputs(
             output, instance_id, model_name, patch, agent, exit_status, extra_info
         )
+        env.cleanup()
 
     logger.info(f"Exit status: {exit_status}. Patch length: {len(patch)} chars.")
     if not patch.strip():
